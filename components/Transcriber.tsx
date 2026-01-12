@@ -160,29 +160,53 @@ export const Transcriber: React.FC = () => {
     if (!activeJobId) return;
     const job = jobs.find(j => j.id === activeJobId);
     if (!job) return;
+
+    // [新增] 檢查暫存：如果已經有排版結果，直接切換模式並結束
+    if (job.formattedHtml) {
+        setViewMode('format');
+        return;
+    }
+
     const sourceText = job.translatedTranscript || job.finalTranscript;
     if (!sourceText) return;
+
     updateJob(activeJobId, { isFormatting: true });
     try {
         const html = await formatToLSMStyle(sourceText);
         updateJob(activeJobId, { formattedHtml: html });
         setViewMode('format');
-    } catch (error) { alert("排版錯誤"); } finally { updateJob(activeJobId, { isFormatting: false }); }
+    } catch (error) {
+        alert("排版錯誤");
+    } finally {
+        updateJob(activeJobId, { isFormatting: false });
+    }
   };
 
   const handleEnrichLinks = async () => {
     if (!activeJobId) return;
     const job = jobs.find(j => j.id === activeJobId);
     if (!job) return;
+
+    // [新增] 檢查暫存：如果已經有連結結果，直接切換模式並結束
+    if (job.enrichedHtml) {
+        setViewMode('split');
+        return;
+    }
+
     const sourceText = job.translatedTranscript || job.finalTranscript;
     if (!sourceText) return;
+
     updateJob(activeJobId, { isEnriching: true });
     try {
         const html = await enrichWithLinks(sourceText);
         updateJob(activeJobId, { enrichedHtml: html });
         setViewMode('split');
-    } catch (error) { alert("連結生成錯誤"); } finally { updateJob(activeJobId, { isEnriching: false }); }
-  };
+    } catch (error) {
+        alert("連結生成錯誤");
+    } finally {
+        updateJob(activeJobId, { isEnriching: false });
+    }
+};
 
   const handleExport = (format: 'txt' | 'doc' | 'pdf') => {
     if (!activeJobId) return;
@@ -425,21 +449,36 @@ export const Transcriber: React.FC = () => {
                     ) : (
                         <>
                             {viewMode === 'edit' && (
-                                <textarea 
-                                    className="flex-1 w-full p-8 focus:outline-none resize-none font-serif text-lg leading-relaxed text-gray-800 bg-white"
-                                    style={{ fontFamily: '"PMingLiU", "Times New Roman", serif' }}
-                                    value={activeJob.translatedTranscript || activeJob.finalTranscript}
-                                    readOnly={activeJob.state.status === TranscribeStatus.PROCESSING || activeJob.state.status === TranscribeStatus.DECODING}
-                                    placeholder={activeJob.state.status === TranscribeStatus.PROCESSING ? "正在努力聽抄中，請稍候..." : ""}
-                                    onChange={(e) => {
-                                        if (activeJob.state.status === TranscribeStatus.COMPLETED) {
-                                            updateJob(activeJob.id, activeJob.translatedTranscript ? 
-                                                { translatedTranscript: e.target.value } : 
-                                                { finalTranscript: e.target.value });
-                                        }
-                                    }}
-                                />
-                            )}
+                              <textarea 
+                                  className="flex-1 w-full p-8 focus:outline-none resize-none font-serif text-lg leading-relaxed text-gray-800 bg-white"
+                                  style={{ fontFamily: '"PMingLiU", "Times New Roman", serif' }}
+                                  value={activeJob.translatedTranscript || activeJob.finalTranscript}
+                                  readOnly={activeJob.state.status === TranscribeStatus.PROCESSING || activeJob.state.status === TranscribeStatus.DECODING}
+                                  placeholder={activeJob.state.status === TranscribeStatus.PROCESSING ? "正在努力聽抄中，請稍候..." : ""}
+                                  onChange={(e) => {
+                                      // 只有在完成狀態才允許編輯
+                                      if (activeJob.state.status === TranscribeStatus.COMPLETED) {
+                                          const newValue = e.target.value;
+                                          
+                                          // [修改重點]：更新文字時，同時清空 formattedHtml 與 enrichedHtml
+                                          // 這樣下次點擊「LSM 排版」或「經文對照」時，程式就會因為內容為空而重新呼叫 AI
+                                          if (activeJob.translatedTranscript) {
+                                              updateJob(activeJob.id, { 
+                                                  translatedTranscript: newValue,
+                                                  formattedHtml: '', // 清除舊排版暫存
+                                                  enrichedHtml: ''   // 清除舊連結暫存
+                                              }); 
+                                          } else {
+                                              updateJob(activeJob.id, { 
+                                                  finalTranscript: newValue,
+                                                  formattedHtml: '', // 清除舊排版暫存
+                                                  enrichedHtml: ''   // 清除舊連結暫存
+                                              });
+                                          }
+                                      }
+                                  }}
+                              />
+                          )}
                             {viewMode === 'format' && (
                                 <div className="flex-1 overflow-y-auto p-8 bg-white">
                                     <div className="max-w-4xl mx-auto prose prose-lg" dangerouslySetInnerHTML={{ __html: activeJob.formattedHtml || '<p class="text-gray-400 italic">尚未排版，請點擊上方 "LSM 排版"</p>' }} />
