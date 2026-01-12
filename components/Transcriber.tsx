@@ -74,25 +74,60 @@ export const Transcriber: React.FC = () => {
 
   const processJob = async (jobId: string) => {
     const job = jobs.find(j => j.id === jobId);
-    if (!job || job.state.status === TranscribeStatus.PROCESSING || job.state.status === TranscribeStatus.COMPLETED) return;
+    // 只要不是處理中，就允許進入（包含 IDLE 或 ERROR 狀態，方便出錯後重跑）
+    if (!job || job.state.status === TranscribeStatus.PROCESSING) return;
+
+    // 建立唯一的快取 Key (檔名 + 大小)
+    const cacheKey = `checkpoint_${job.file.name}_${job.file.size}`;
+    const savedData = localStorage.getItem(cacheKey);
+    
+    let startFromIndex = 0;
+    let accumulatedText = "";
+
+    // 1. 偵測並詢問是否恢復進度
+    if (savedData) {
+        try {
+            const { completedChunks, text } = JSON.parse(savedData);
+            if (completedChunks > 0 && window.confirm(`偵測到上次已辨識 ${completedChunks} 個片段，是否從中斷處繼續？`)) {
+                startFromIndex = completedChunks;
+                accumulatedText = text;
+            } else {
+                // 如果使用者選擇不恢復，就清除該舊暫存
+                localStorage.removeItem(cacheKey);
+            }
+        } catch (e) {
+            console.error("解析暫存失敗", e);
+        }
+    }
 
     try {
         updateJobState(jobId, { status: TranscribeStatus.DECODING, currentOperation: '解碼中...' });
         const audioBuffer = await decodeAndResampleAudio(job.file);
+        
         updateJob(jobId, (prev) => ({ 
-            metadata: prev.metadata ? { ...prev.metadata, duration: audioBuffer.duration } : null 
+            metadata: prev.metadata ? { ...prev.metadata, duration: audioBuffer.duration } : null,
+            finalTranscript: accumulatedText // 初始化顯示已恢復的文字
         }));
 
         updateJobState(jobId, { status: TranscribeStatus.PROCESSING, currentOperation: '分析段落中...' });
         const chunksData = sliceAudioBufferSmart(audioBuffer, CHUNK_DURATION_SECONDS);
         const total = chunksData.length;
 
-        updateJobState(jobId, { totalChunks: total, completedChunks: 0, progress: 0, currentOperation: '開始聽抄...' });
+        updateJobState(jobId, { 
+            totalChunks: total, 
+            completedChunks: startFromIndex, 
+            progress: Math.round((startFromIndex / total) * 90), 
+            currentOperation: startFromIndex > 0 ? '恢復進度中...' : '開始聽抄...' 
+        });
 
         const results: ChunkResult[] = [];
-        let accumulatedText = "";
+        // 如果是恢復進度，可以考慮把前面的 results 補齊（這部分主要影響 UI 顯示）
+        for (let k = 0; k < startFromIndex; k++) {
+            results.push({ id: k, startTime: 0, endTime: 0, text: "[已恢復]", status: 'completed' });
+        }
 
-        for (let i = 0; i < total; i++) {
+        // 2. 迴圈從 startFromIndex 開始
+        for (let i = startFromIndex; i < total; i++) {
             const { blob, start, end } = chunksData[i];
             
             updateJobState(jobId, { 
@@ -104,19 +139,28 @@ export const Transcriber: React.FC = () => {
                 const context = accumulatedText.slice(-200);
                 const text = await transcribeAudioChunk(blob, context);
                 
-                const formatTime = (seconds: number) => {
-                    const min = Math.floor(seconds / 60);
-                    const sec = Math.floor(seconds % 60);
-                    return `${min}:${sec.toString().padStart(2, '0')}`;
-                };
-                const timestamp = `[${formatTime(start)}] `;
-                accumulatedText += (accumulatedText ? "\n\n" : "") + timestamp + text;
+                const timeLabel = `[${formatTime(start)}] `;
+                accumulatedText += (accumulatedText ? "\n\n" : "") + timeLabel + text;
                 
+                // 儲存進度到 localStorage
+                localStorage.setItem(cacheKey, JSON.stringify({
+                    completedChunks: i + 1,
+                    text: accumulatedText
+                }));
+
                 const chunk: ChunkResult = { id: i, startTime: start, endTime: end, text, status: 'completed' };
                 results.push(chunk);
-                updateJob(jobId, { chunks: [...results], finalTranscript: accumulatedText });
-            } catch (err) {
+                
+                updateJob(jobId, { 
+                    chunks: [...results],
+                    finalTranscript: accumulatedText 
+                });
+            } catch (err: any) {
                 console.error(`Error chunk ${i}:`, err);
+                // 遇到 429 錯誤時停止，保留目前進度
+                if (err.message?.includes('429')) {
+                    throw new Error("API 配額已滿，進度已儲存，請晚點再試。");
+                }
                 const chunk: ChunkResult = { id: i, startTime: start, endTime: end, text: "[失敗]", status: 'error' };
                 results.push(chunk);
                 updateJob(jobId, { chunks: [...results] });
@@ -126,14 +170,21 @@ export const Transcriber: React.FC = () => {
 
         updateJobState(jobId, { currentOperation: '正在優化全篇文稿...' });
         const refinedText = await refineAndMergeTranscript(accumulatedText);
+        
         updateJob(jobId, { finalTranscript: refinedText });
         updateJobState(jobId, { status: TranscribeStatus.COMPLETED, progress: 100, currentOperation: '完成' });
 
+        // 3. 全部完成後清除暫存
+        localStorage.removeItem(cacheKey);
+
     } catch (error: any) {
         console.error("Critical Error:", error);
-        updateJobState(jobId, { status: TranscribeStatus.ERROR, error: error.message || "處理失敗" });
+        updateJobState(jobId, { 
+            status: TranscribeStatus.ERROR, 
+            error: error.message || "處理失敗" 
+        });
     }
-  };
+};
 
   const handleBatchProcess = async () => {
     setIsBatchProcessing(true);
@@ -279,7 +330,14 @@ export const Transcriber: React.FC = () => {
            >
              <Plus className="w-4 h-4" />
            </button>
-           <input type="file" ref={fileInputRef} onChange={handleFileChange} accept="audio/*" multiple className="hidden" />
+           <input 
+                type="file" 
+                ref={fileInputRef} 
+                onChange={handleFileChange} 
+                accept="audio/*,video/*" 
+                multiple 
+                className="hidden" 
+            />
         </div>
 
         {/* File List */}

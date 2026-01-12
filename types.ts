@@ -16,11 +16,13 @@ export interface ChunkResult {
 
 export interface ProcessingState {
   status: TranscribeStatus;
-  progress: number; // 0-100
+  progress: number;
   totalChunks: number;
   completedChunks: number;
   currentOperation?: string;
   error?: string;
+  // 新增：記錄上次儲存的片段索引
+  lastSavedIndex?: number; 
 }
 
 export interface AudioMetadata {
