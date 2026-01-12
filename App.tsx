@@ -8,19 +8,26 @@ const App: React.FC = () => {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between h-16">
             <div className="flex items-center gap-2">
-              <span className="bg-blue-600 text-white p-1 rounded font-bold text-lg">LSM</span>
-              <span className="font-semibold text-xl tracking-tight text-gray-800">主恢復聽抄翻譯<span className="text-blue-600">小幫手</span></span>
+              {/* 修改 1: LSM 圖示縮小，手機 text-sm，電腦恢復 text-lg */}
+              <span className="bg-blue-600 text-white p-1 rounded font-bold text-sm md:text-lg">LSM</span>
+              
+              {/* 修改 2: 標題文字縮小，手機 text-sm 或 text-base，電腦恢復 text-xl */}
+              <span className="font-semibold text-sm md:text-xl tracking-tight text-gray-800">
+                主恢復聽抄翻譯<span className="text-blue-600">小幫手</span>
+              </span>
             </div>
+            
             <div className="flex items-center">
-              <span className="text-xs font-medium text-gray-400 bg-gray-100 px-2 py-1 rounded">
-                Powered by Gemini 3.0
+              {/* 修改 3 (選配): Powered by 文字在手機上也可以縮小一點 */}
+              <span className="text-[10px] md:text-xs font-medium text-gray-400 bg-gray-100 px-2 py-1 rounded">
+                Powered by Gemini AI
               </span>
             </div>
           </div>
         </div>
       </nav>
 
-      <main className="py-10">
+      <main className="py-6 md:py-10"> {/* 修改 4: 手機版上下的 padding 也稍微縮小 (py-6) */}
         <Transcriber />
       </main>
 
