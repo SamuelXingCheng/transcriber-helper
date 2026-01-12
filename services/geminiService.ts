@@ -1,30 +1,49 @@
 // services/geminiService.ts
-import { GoogleGenAI } from "@google/genai";
 import { blobToBase64 } from "./audioService";
 
-// Initialize Gemini
-const getAiClient = () => {
-    const apiKey = process.env.API_KEY;
-    if (!apiKey) {
-        throw new Error("API Key not found in environment variables.");
+// [核心功能] 呼叫後端 PHP 代理的通用函式
+const callGeminiProxy = async (action: string, payload: any): Promise<string> => {
+  try {
+    // [修改] 使用您提供的正確完整網址，不再使用相對路徑
+    const proxyUrl = 'https://www.citcnew.org.tw/trans/proxy.php';
+    
+    const response = await fetch(proxyUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action, payload }),
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      // 如果看到 404，代表網址還是錯的；如果看到 500，代表 PHP 程式執行錯誤
+      throw new Error(`Server Error (${response.status}): ${errText}`);
     }
-    return new GoogleGenAI({ apiKey });
+
+    const data = await response.json();
+
+    if (data.candidates && data.candidates[0]?.content?.parts?.[0]?.text) {
+      return data.candidates[0].content.parts[0].text;
+    } else if (data.error) {
+      throw new Error(`Google API Error: ${data.error.message || JSON.stringify(data.error)}`);
+    } else {
+      console.warn("未知的回傳結構:", data);
+      return "";
+    }
+
+  } catch (error) {
+    console.error(`Gemini Proxy Error [${action}]:`, error);
+    throw error;
+  }
 };
 
-// Helper function to get model ID
-const getModelId = () => {
-    return process.env.GEMINI_MODEL || "gemini-3-flash-preview";
-};
-
+// 1. 音訊聽抄
 export const transcribeAudioChunk = async (
   audioBlob: Blob, 
   previousContext?: string
 ): Promise<string> => {
-  const ai = getAiClient();
   const base64Data = await blobToBase64(audioBlob);
-  const modelId = getModelId(); 
-
-  // 優化後的聽抄 Prompt
+  
+  // 保持原本的 Prompt 邏輯
   const prompt = `
     You are a professional transcriber for Living Stream Ministry (LSM).
     Your task is to transcribe the audio exactly as spoken, distinguishing between speakers.
@@ -51,36 +70,15 @@ export const transcribeAudioChunk = async (
     ${previousContext ? `**Previous Context** (for continuity only, do not repeat): "...${previousContext.slice(-200)}"` : ''}
   `;
 
-  try {
-    const response = await ai.models.generateContent({
-      model: modelId,
-      contents: {
-        parts: [
-          {
-            inlineData: {
-              mimeType: "audio/wav",
-              data: base64Data,
-            },
-          },
-          {
-            text: prompt,
-          },
-        ],
-      },
-    });
-
-    return response.text || "";
-  } catch (error) {
-    console.error("Gemini Transcription Error:", error);
-    throw error;
-  }
+  // 改用代理呼叫
+  return callGeminiProxy('transcribe', {
+    audioBase64: base64Data,
+    prompt: prompt
+  });
 };
 
+// 2. 潤稿與合併
 export const refineAndMergeTranscript = async (fullText: string): Promise<string> => {
-    const ai = getAiClient();
-    const modelId = getModelId();
-
-    // 優化後的潤飾 Prompt
     const prompt = `
       You are a senior editor for the Living Stream Ministry (LSM).
       You are refining a raw transcript merged from audio segments.
@@ -111,22 +109,16 @@ export const refineAndMergeTranscript = async (fullText: string): Promise<string
       Return ONLY the refined transcript text.
     `;
 
-     try {
-        const response = await ai.models.generateContent({
-            model: modelId,
-            contents: prompt
-        });
-        return response.text || fullText;
+    try {
+        return await callGeminiProxy('refine', { prompt });
     } catch (e) {
         console.warn("Refining failed, returning original", e);
         return fullText;
     }
 };
 
+// 3. 翻譯
 export const translateTranscript = async (text: string): Promise<string> => {
-    const ai = getAiClient();
-    const modelId = getModelId();
-
     const prompt = `
       You are a professional translator specializing in Watchman Nee and Witness Lee publications.
 
@@ -145,22 +137,11 @@ export const translateTranscript = async (text: string): Promise<string> => {
       ${text}
     `;
 
-    try {
-        const response = await ai.models.generateContent({
-            model: modelId,
-            contents: prompt
-        });
-        return response.text || "";
-    } catch (e) {
-        console.error("Translation Error:", e);
-        throw e;
-    }
+    return callGeminiProxy('translate', { prompt });
 };
 
+// 4. 排版 (LSM Style)
 export const formatToLSMStyle = async (text: string): Promise<string> => {
-    const ai = getAiClient();
-    const modelId = getModelId();
-
     const prompt = `
       You are an editor for Living Stream Ministry (LSM). 
       Format the following text into a "Conference Outline" style using HTML.
@@ -186,21 +167,15 @@ export const formatToLSMStyle = async (text: string): Promise<string> => {
     `;
 
     try {
-        const response = await ai.models.generateContent({
-            model: modelId,
-            contents: prompt
-        });
-        return response.text || text;
+        return await callGeminiProxy('format', { prompt });
     } catch (e) {
         console.error("Formatting Error:", e);
-        throw e;
+        return text;
     }
 };
 
+// 5. 連結增強
 export const enrichWithLinks = async (text: string): Promise<string> => {
-    const ai = getAiClient();
-    const modelId = getModelId();
-
     const prompt = `
       You are a research assistant for the Recovery Version Bible and Ministry Books.
       Analyze the text and add HTML hyperlinks <a> tags to specific references.
@@ -234,13 +209,9 @@ export const enrichWithLinks = async (text: string): Promise<string> => {
     `;
 
     try {
-        const response = await ai.models.generateContent({
-            model: modelId,
-            contents: prompt
-        });
-        return response.text || text;
+        return await callGeminiProxy('enrich', { prompt });
     } catch (e) {
         console.error("Linking Error:", e);
-        throw e;
+        return text;
     }
 };

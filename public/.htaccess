@@ -1,0 +1,16 @@
+# 禁止任何人存取 .env 檔案
+<Files .env>
+    Order allow,deny
+    Deny from all
+</Files>
+
+# 額外建議：如果您希望預設都走 index.html (解決 React 重新整理出現 404 的問題)
+# 如果您的主機已經有處理 SPA 路由，下面這段可以不用加
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteBase /
+  RewriteRule ^index\.html$ - [L]
+  RewriteCond %{REQUEST_FILENAME} !-f
+  RewriteCond %{REQUEST_FILENAME} !-d
+  RewriteRule . /index.html [L]
+</IfModule>
