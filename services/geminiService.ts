@@ -206,22 +206,28 @@ export const enrichWithLinks = async (text: string): Promise<string> => {
       Analyze the text and add HTML hyperlinks <a> tags to specific references.
 
       Linking Rules:
-      1. **Bible Verses**: 
-         - Detect verses (e.g., "John 3:16", "Matthew 1:1", "創世記一章一節").
-         - If Chinese: Link to \`https://www.recoveryversion.com.tw/Style0A/026/search_f.php?q=[VerseReference]\`
-         - If English: Link to \`https://online.recoveryversion.bible/Search/Search.asp?q=[VerseReference]\`
-      
-      2. **Ministry Terms/Books**:
-         - Detect mentions of specific books (e.g., "Life-study of Genesis", "生命讀經", "Further Talks on the Church Life").
-         - Also detect specific theological terms: "God's Economy" (神的經綸), "The Spirit" (那靈).
-         - If Chinese: Link to \`https://www.twgbr.org.tw/search?q=[Term]\`
-         - If English: Link to \`https://www.ministrybooks.org/search.php?q=[Term]\`
+      1. **Bible Verses (Chinese)**: 
+         - Detect Chinese Bible verses (e.g., "馬太福音一章23節", "創世記1:1").
+         - **Logic**: You must identify the Book Name, Chapter, and Verse number.
+         - **Conversion**: Convert the Book Name into its standard index number (Genesis=1, Malachi=39, Matthew=40, Revelation=66).
+         - **Format**: Construct the URL as: \`https://recoveryversion.com.tw/Style0A/026/read_List.php?f_BookNo=[BookIndex]&f_ChapterNo=[Chapter]&f_VerseNo=[Verse]#[Verse]\`
+         - **Example**: "馬太福音一章23節" becomes \`...read_List.php?f_BookNo=40&f_ChapterNo=1&f_VerseNo=23#23\`
 
-      3. **Original Language**:
+      2. **Bible Verses (English)**:
+         - Detect verses (e.g., "John 3:16").
+         - Link to \`https://online.recoveryversion.bible/Search/Search.asp?q=[VerseReference]\`
+      
+      3. **Ministry Terms/Books**:
+         - Detect mentions of specific books (e.g., "Life-study of Genesis", "The Vital Groups").
+         - Also detect specific theological terms if they appear in book titles.
+         - If Chinese: Link to \`https://www.twgbr.org.tw/products?query=[Term]\`
+         - If English: Link to \`https://www.ministrybooks.org/books/?t=ALL&f=[Term]\`
+
+      4. **Original Language**:
          - If Greek or Hebrew words are mentioned, link them to a general search on the respective sites.
 
-      4. Return the text fully formatted in HTML, preserving the original structure but adding <a> tags with target="_blank" and style="color: #2563eb; text-decoration: underline;".
-      5. **Language Requirement: Ensure all Chinese text remains in (or is converted to) Traditional Chinese (繁體中文).**
+      5. **Output**: Return the text fully formatted in HTML. Add <a> tags with target="_blank" and style="color: #2563eb; text-decoration: underline;".
+      6. **Language Requirement**: Ensure all Chinese text remains in Traditional Chinese (繁體中文).
 
       Text to enrich:
       ${text}
