@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Upload, FileAudio, Play, Download, RefreshCw, AlertCircle, CheckCircle2, Scissors, Type, Languages, Sparkles, FileText, BookOpen, Layout, Trash2, Layers, Plus } from 'lucide-react';
-import { decodeAndResampleAudio, sliceAudioBuffer } from '../services/audioService';
+import { decodeAndResampleAudio, sliceAudioBufferSmart } from '../services/audioService';
 import { transcribeAudioChunk, refineAndMergeTranscript, translateTranscript, formatToLSMStyle, enrichWithLinks } from '../services/geminiService';
 import { ChunkResult, ProcessingState, TranscribeStatus, AudioMetadata, FileJob } from '../types';
 
@@ -79,61 +79,75 @@ export const Transcriber: React.FC = () => {
     if (!job || job.state.status === TranscribeStatus.PROCESSING || job.state.status === TranscribeStatus.COMPLETED) return;
 
     try {
-      updateJobState(jobId, { status: TranscribeStatus.DECODING, currentOperation: '解碼中...' });
-      
-      const audioBuffer = await decodeAndResampleAudio(job.file);
-      updateJob(jobId, (prev) => ({ 
-          metadata: prev.metadata ? { ...prev.metadata, duration: audioBuffer.duration } : null 
-      }));
-
-      updateJobState(jobId, { status: TranscribeStatus.PROCESSING, currentOperation: '切分檔案中...' });
-      const audioBlobs = sliceAudioBuffer(audioBuffer, CHUNK_DURATION_SECONDS);
-      const total = audioBlobs.length;
-
-      updateJobState(jobId, { totalChunks: total, completedChunks: 0, progress: 0, currentOperation: '開始聽抄...' });
-
-      const results: ChunkResult[] = [];
-      let accumulatedText = "";
-
-      for (let i = 0; i < total; i++) {
-        const startTime = i * CHUNK_DURATION_SECONDS;
-        const endTime = Math.min((i + 1) * CHUNK_DURATION_SECONDS, audioBuffer.duration);
+        updateJobState(jobId, { status: TranscribeStatus.DECODING, currentOperation: '解碼中...' });
         
-        updateJobState(jobId, { 
-          currentOperation: `聽抄片段 ${i + 1}/${total}...`,
-          progress: Math.round((i / total) * 90)
-        });
+        const audioBuffer = await decodeAndResampleAudio(job.file);
+        updateJob(jobId, (prev) => ({ 
+            metadata: prev.metadata ? { ...prev.metadata, duration: audioBuffer.duration } : null 
+        }));
 
-        try {
-          const context = accumulatedText.slice(-200);
-          const text = await transcribeAudioChunk(audioBlobs[i], context);
-          accumulatedText += text + " ";
-          
-          const chunk: ChunkResult = { id: i, startTime, endTime, text, status: 'completed' };
-          results.push(chunk);
-          
-          updateJob(jobId, { chunks: [...results] });
-        } catch (err) {
-          console.error(`Error chunk ${i}:`, err);
-          const chunk: ChunkResult = { id: i, startTime, endTime, text: "[失敗]", status: 'error' };
-          results.push(chunk);
-          updateJob(jobId, { chunks: [...results] });
+        updateJobState(jobId, { status: TranscribeStatus.PROCESSING, currentOperation: '分析段落中...' });
+        
+        // 1. 這裡現在回傳的是物件陣列 [{ blob, start, end }, ...]
+        const chunksData = sliceAudioBufferSmart(audioBuffer, CHUNK_DURATION_SECONDS);
+        const total = chunksData.length;
+
+        updateJobState(jobId, { totalChunks: total, completedChunks: 0, progress: 0, currentOperation: '開始聽抄...' });
+
+        const results: ChunkResult[] = [];
+        let accumulatedText = "";
+
+        for (let i = 0; i < total; i++) {
+            // 2. 這裡必須解構，取出 blob 以及時間資訊
+            const { blob, start, end } = chunksData[i];
+            
+            updateJobState(jobId, { 
+                currentOperation: `聽抄片段 ${i + 1}/${total}...`,
+                progress: Math.round((i / total) * 90)
+            });
+
+            try {
+                const context = accumulatedText.slice(-200);
+                // 3. 確保傳入的是 blob，而不是 chunksData[i] 本身
+                const text = await transcribeAudioChunk(blob, context);
+                
+                // 為了達成完成即顯示，這裡要即時更新 accumulatedText
+                accumulatedText += (accumulatedText ? " " : "") + text;
+                
+                const chunk: ChunkResult = { 
+                    id: i, 
+                    startTime: start, 
+                    endTime: end, 
+                    text, 
+                    status: 'completed' 
+                };
+                results.push(chunk);
+                
+                // 即時更新到任務中
+                updateJob(jobId, { 
+                    chunks: [...results],
+                    finalTranscript: accumulatedText // 達成辨識完即顯示
+                });
+            } catch (err) {
+                console.error(`Error chunk ${i}:`, err);
+                const chunk: ChunkResult = { id: i, startTime: start, endTime: end, text: "[失敗]", status: 'error' };
+                results.push(chunk);
+                updateJob(jobId, { chunks: [...results] });
+            }
+            updateJobState(jobId, { completedChunks: i + 1 });
         }
-        updateJobState(jobId, { completedChunks: i + 1 });
-      }
 
-      updateJobState(jobId, { currentOperation: '正在優化文稿...' });
-      const rawMergedText = results.map(c => c.text).join(" ").replace(/\s+/g, ' ').trim();
-      const refinedText = await refineAndMergeTranscript(rawMergedText);
-      
-      updateJob(jobId, { finalTranscript: refinedText });
-      updateJobState(jobId, { status: TranscribeStatus.COMPLETED, progress: 100, currentOperation: '完成' });
+        updateJobState(jobId, { currentOperation: '正在優化全篇文稿...' });
+        const refinedText = await refineAndMergeTranscript(accumulatedText);
+        
+        updateJob(jobId, { finalTranscript: refinedText });
+        updateJobState(jobId, { status: TranscribeStatus.COMPLETED, progress: 100, currentOperation: '完成' });
 
     } catch (error: any) {
-      console.error("Critical Error:", error);
-      updateJobState(jobId, { status: TranscribeStatus.ERROR, error: error.message || "處理失敗" });
+        console.error("Critical Error:", error);
+        updateJobState(jobId, { status: TranscribeStatus.ERROR, error: error.message || "處理失敗" });
     }
-  };
+};
 
   const handleBatchProcess = async () => {
     setIsBatchProcessing(true);
@@ -371,6 +385,32 @@ export const Transcriber: React.FC = () => {
                         <button onClick={handleTranslate} disabled={activeJob.isTranslating || !!activeJob.translatedTranscript} className={`px-3 py-2 text-sm font-medium rounded-lg flex items-center gap-2 ${activeJob.translatedTranscript ? 'text-green-600 bg-green-50' : 'text-gray-600 hover:bg-gray-100'}`}>
                             {activeJob.isTranslating ? <RefreshCw className="w-4 h-4 animate-spin"/> : <Languages className="w-4 h-4" />} {activeJob.translatedTranscript ? '已翻譯' : '翻譯'}
                         </button>
+
+                        <div className="w-px h-6 bg-gray-300 mx-2 self-center"></div>
+        
+                        {/* 新增狀態標籤區塊 */}
+                        <div className="flex items-center gap-2">
+                            {activeJob.state.status === TranscribeStatus.PROCESSING && activeJob.state.completedChunks < activeJob.state.totalChunks && (
+                                <span className="flex items-center gap-1.5 bg-amber-50 text-amber-700 px-3 py-1 rounded-full text-xs font-bold border border-amber-200 animate-pulse">
+                                    <RefreshCw className="w-3 h-3 animate-spin" />
+                                    辨識中：原始草稿 ({activeJob.state.completedChunks}/{activeJob.state.totalChunks})
+                                </span>
+                            )}
+                            
+                            {activeJob.state.status === TranscribeStatus.PROCESSING && activeJob.state.completedChunks === activeJob.state.totalChunks && (
+                                <span className="flex items-center gap-1.5 bg-blue-50 text-blue-700 px-3 py-1 rounded-full text-xs font-bold border border-blue-200 animate-pulse">
+                                    <Sparkles className="w-3 h-3" />
+                                    主恢復術語校對中...
+                                </span>
+                            )}
+
+                            {activeJob.state.status === TranscribeStatus.COMPLETED && (
+                                <span className="flex items-center gap-1.5 bg-green-50 text-green-700 px-3 py-1 rounded-full text-xs font-bold border border-green-200">
+                                    <CheckCircle2 className="w-3 h-3" />
+                                    完成：潤稿已套用
+                                </span>
+                            )}
+                        </div>
                     </div>
 
                     <div className="relative group">
@@ -427,7 +467,17 @@ export const Transcriber: React.FC = () => {
                                     className="flex-1 w-full p-8 focus:outline-none resize-none font-serif text-lg leading-relaxed text-gray-800 bg-white"
                                     style={{ fontFamily: '"PMingLiU", "Times New Roman", serif' }}
                                     value={activeJob.translatedTranscript || activeJob.finalTranscript}
-                                    onChange={(e) => updateJob(activeJob.id, activeJob.translatedTranscript ? { translatedTranscript: e.target.value } : { finalTranscript: e.target.value })}
+                                    // 當狀態為處理中時，設為唯讀，避免自動更新蓋掉您的手動修改
+                                    readOnly={activeJob.state.status === TranscribeStatus.PROCESSING || activeJob.state.status === TranscribeStatus.DECODING}
+                                    placeholder={activeJob.state.status === TranscribeStatus.PROCESSING ? "正在努力聽抄中，請稍候..." : ""}
+                                    onChange={(e) => {
+                                        // 只有完成後才允許更新狀態
+                                        if (activeJob.state.status === TranscribeStatus.COMPLETED) {
+                                            updateJob(activeJob.id, activeJob.translatedTranscript ? 
+                                                { translatedTranscript: e.target.value } : 
+                                                { finalTranscript: e.target.value });
+                                        }
+                                    }}
                                 />
                             )}
                             {viewMode === 'format' && (

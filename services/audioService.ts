@@ -1,22 +1,22 @@
+// services/audioService.ts
+
 /**
  * Decodes an audio file and resamples it to 16kHz mono to save tokens and bandwidth.
  */
 export const decodeAndResampleAudio = async (file: File): Promise<AudioBuffer> => {
   const arrayBuffer = await file.arrayBuffer();
-  // Fix: Cast window to any to access webkitAudioContext property which doesn't exist on standard Window type
+  // Fix: Cast window to any to access webkitAudioContext property
   const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)({
-    sampleRate: 16000, // Force 16kHz context
+    sampleRate: 16000, 
   });
 
   try {
     const decodedBuffer = await audioContext.decodeAudioData(arrayBuffer);
     
-    // Check if we need to mix down to mono
     if (decodedBuffer.numberOfChannels === 1 && decodedBuffer.sampleRate === 16000) {
       return decodedBuffer;
     }
 
-    // Offline context to resample/mixdown efficiently
     const offlineCtx = new OfflineAudioContext(1, decodedBuffer.duration * 16000, 16000);
     const source = offlineCtx.createBufferSource();
     source.buffer = decodedBuffer;
@@ -43,32 +43,29 @@ export const audioBufferToWav = (buffer: AudioBuffer): Blob => {
   let offset = 0;
   let pos = 0;
 
-  // write WAVE header
   setUint32(0x46464952); // "RIFF"
-  setUint32(length - 8); // file length - 8
+  setUint32(length - 8); 
   setUint32(0x45564157); // "WAVE"
 
-  setUint32(0x20746d66); // "fmt " chunk
-  setUint32(16); // length = 16
-  setUint16(1); // PCM (uncompressed)
+  setUint32(0x20746d66); // "fmt "
+  setUint32(16); 
+  setUint16(1); 
   setUint16(numOfChan);
   setUint32(buffer.sampleRate);
-  setUint32(buffer.sampleRate * 2 * numOfChan); // avg. bytes/sec
-  setUint16(numOfChan * 2); // block-align
-  setUint16(16); // 16-bit (hardcoded in this writer)
+  setUint32(buffer.sampleRate * 2 * numOfChan); 
+  setUint16(numOfChan * 2); 
+  setUint16(16); 
 
-  setUint32(0x61746164); // "data" - chunk
-  setUint32(length - pos - 4); // chunk length
+  setUint32(0x61746164); // "data"
+  setUint32(length - pos - 4); 
 
-  // write interleaved data
   for (i = 0; i < buffer.numberOfChannels; i++)
     channels.push(buffer.getChannelData(i));
 
   while (pos < buffer.length) {
     for (i = 0; i < numOfChan; i++) {
-      // interleave channels
-      sample = Math.max(-1, Math.min(1, channels[i][pos])); // clamp
-      sample = (0.5 + sample < 0 ? sample * 32768 : sample * 32767) | 0; // scale to 16-bit signed int
+      sample = Math.max(-1, Math.min(1, channels[i][pos])); 
+      sample = (0.5 + sample < 0 ? sample * 32768 : sample * 32767) | 0; 
       view.setInt16(44 + offset, sample, true);
       offset += 2;
     }
@@ -89,41 +86,94 @@ export const audioBufferToWav = (buffer: AudioBuffer): Blob => {
 };
 
 /**
- * Slices an AudioBuffer into multiple chunks of a given duration (in seconds).
+ * Slices an AudioBuffer into multiple chunks (Legacy function, keeping for compatibility if needed)
  */
 export const sliceAudioBuffer = (
   buffer: AudioBuffer,
   chunkDurationSeconds: number
 ): Blob[] => {
   const chunks: Blob[] = [];
-  const totalDuration = buffer.duration;
   const sampleRate = buffer.sampleRate;
   const samplesPerChunk = chunkDurationSeconds * sampleRate;
-  
-  // We use the 16kHz mono buffer directly
   const channelData = buffer.getChannelData(0); 
 
   for (let startSample = 0; startSample < buffer.length; startSample += samplesPerChunk) {
     const endSample = Math.min(startSample + samplesPerChunk, buffer.length);
     const frameCount = endSample - startSample;
-    
-    // Create a new buffer for this chunk
-    // We create a temporary AudioContext just to create the buffer structure
-    // but honestly we can just build the WAV directly from the Float32Array slice
-    // to save memory overhead of creating AudioBuffers repeatedly.
-    
-    // Let's reuse the audioBufferToWav logic but adapted for raw float array to save ops
-    // Actually, creating a small AudioBuffer is safer for correctness with the helper above.
     const chunkBuffer = new AudioBuffer({
         length: frameCount,
         numberOfChannels: 1,
         sampleRate: sampleRate
     });
-    
     chunkBuffer.copyToChannel(channelData.slice(startSample, endSample), 0);
     chunks.push(audioBufferToWav(chunkBuffer));
   }
+  return chunks;
+};
 
+/**
+ * Smart Slicing: Detects silence to split audio.
+ * Returns OBJECTS with blob, start, and end times.
+ */
+export const sliceAudioBufferSmart = (
+  buffer: AudioBuffer,
+  targetChunkDuration: number = 300, 
+  silenceThreshold: number = 0.01    
+): { blob: Blob; start: number; end: number }[] => {
+  const chunks: { blob: Blob; start: number; end: number }[] = [];
+  const sampleRate = buffer.sampleRate;
+  const channelData = buffer.getChannelData(0);
+  let currentStartSample = 0;
+
+  while (currentStartSample < buffer.length) {
+    let targetEndSample = currentStartSample + targetChunkDuration * sampleRate;
+    
+    if (buffer.length - targetEndSample < (targetChunkDuration * sampleRate) * 0.2) {
+      targetEndSample = buffer.length;
+    } else {
+      const searchRange = 15 * sampleRate;
+      const searchStart = Math.max(currentStartSample, targetEndSample - searchRange);
+      const searchEnd = Math.min(buffer.length, targetEndSample + searchRange);
+      
+      let bestSilencePoint = targetEndSample;
+      let minRms = Infinity;
+
+      for (let i = searchStart; i < searchEnd; i += Math.floor(sampleRate * 0.1)) {
+        const windowSize = Math.floor(sampleRate * 0.5); 
+        if (i + windowSize > buffer.length) break;
+        
+        let sum = 0;
+        for (let j = 0; j < windowSize; j++) {
+          const val = channelData[i + j];
+          sum += val * val;
+        }
+        const rms = Math.sqrt(sum / windowSize);
+        
+        if (rms < minRms) {
+          minRms = rms;
+          bestSilencePoint = i + Math.floor(windowSize / 2);
+        }
+        if (rms < silenceThreshold) break; 
+      }
+      targetEndSample = bestSilencePoint;
+    }
+
+    const frameCount = targetEndSample - currentStartSample;
+    const chunkBuffer = new AudioBuffer({
+      length: frameCount,
+      numberOfChannels: 1,
+      sampleRate: sampleRate
+    });
+    
+    chunkBuffer.copyToChannel(channelData.slice(currentStartSample, targetEndSample), 0);
+    chunks.push({
+      blob: audioBufferToWav(chunkBuffer), // 這裡產生 Blob
+      start: currentStartSample / sampleRate,
+      end: targetEndSample / sampleRate
+    });
+    
+    currentStartSample = targetEndSample;
+  }
   return chunks;
 };
 
@@ -132,7 +182,6 @@ export const blobToBase64 = (blob: Blob): Promise<string> => {
     const reader = new FileReader();
     reader.onloadend = () => {
       if (typeof reader.result === 'string') {
-        // Remove the Data-URL declaration (e.g., "data:audio/wav;base64,")
         const base64 = reader.result.split(',')[1];
         resolve(base64);
       } else {
@@ -140,6 +189,6 @@ export const blobToBase64 = (blob: Blob): Promise<string> => {
       }
     };
     reader.onerror = reject;
-    reader.readAsDataURL(blob);
+    reader.readAsDataURL(blob); // 報錯就是發生在這裡，如果 blob 是 undefined 就會失敗
   });
 };

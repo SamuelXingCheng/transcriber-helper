@@ -1,3 +1,4 @@
+// services/geminiService.ts
 import { GoogleGenAI } from "@google/genai";
 import { blobToBase64 } from "./audioService";
 
@@ -10,27 +11,44 @@ const getAiClient = () => {
     return new GoogleGenAI({ apiKey });
 };
 
+// Helper function to get model ID
+const getModelId = () => {
+    return process.env.GEMINI_MODEL || "gemini-3-flash-preview";
+};
+
 export const transcribeAudioChunk = async (
   audioBlob: Blob, 
   previousContext?: string
 ): Promise<string> => {
   const ai = getAiClient();
   const base64Data = await blobToBase64(audioBlob);
+  const modelId = getModelId(); 
 
-  const modelId = "gemini-3-flash-preview"; 
-
+  // 優化後的聽抄 Prompt
   const prompt = `
-    You are a professional transcriber. 
-    Transcribe the following audio exactly as spoken. 
-    The audio may contain English or Chinese. 
-    
-    ${previousContext ? `Context from the previous segment: "...${previousContext.slice(-200)}". Continue seamlessly.` : ''}
+    You are a professional transcriber for Living Stream Ministry (LSM).
+    Your task is to transcribe the audio exactly as spoken, distinguishing between speakers.
 
-    Rules:
-    1. Output ONLY the transcription. No preamble, no "Here is the transcript".
-    2. If there are multiple speakers, indicate them with "Speaker 1:", "Speaker 2:" only if distinct.
-    3. Ignore filler words like "um", "uh" unless they add meaning.
-    4. Ensure correct punctuation.
+    **Context**:
+    - This audio contains ministry messages or fellowship related to the Lord's Recovery.
+    - Specific Terminology Source: Recovery Version Bible (恢復本聖經), Life-studies (生命讀經), and the ministry of Watchman Nee and Witness Lee.
+
+    **Instructions**:
+    1. **Speaker Identification**: 
+       - Detect distinct voices. Label them as **[Speaker 1]**, **[Speaker 2]**, etc.
+       - Start a new line whenever the speaker changes.
+    2. **Language**: 
+       - Output MUST be in **Traditional Chinese (繁體中文)** if the audio is Chinese.
+       - Do NOT use Simplified Chinese.
+    3. **Terminology Accuracy**:
+       - Use specific ministry terms (e.g., use "交通" instead of "交流", "盡功用" instead of "發揮功能", "相調" instead of "混合").
+       - Listen carefully for biblical names and terms according to the Recovery Version.
+    4. **Verbatim Transcription**:
+       - Transcribe exactly what is said. 
+       - Ignore meaningless filler words (like "um", "uh") unless they add emphasis.
+       - Keep the original sentence structure.
+
+    ${previousContext ? `**Previous Context** (for continuity only, do not repeat): "...${previousContext.slice(-200)}"` : ''}
   `;
 
   try {
@@ -60,21 +78,37 @@ export const transcribeAudioChunk = async (
 
 export const refineAndMergeTranscript = async (fullText: string): Promise<string> => {
     const ai = getAiClient();
-    const modelId = "gemini-3-pro-preview";
+    const modelId = getModelId();
 
+    // 優化後的潤飾 Prompt
     const prompt = `
-      You are a strict verbatim editor. The following text is a merged transcript from audio chunks.
-      
-      Your task:
-      1. Fix broken sentences at the connection points.
-      2. Remove ONLY meaningless filler words.
-      3. Correct punctuation and organize into logical paragraphs.
-      4. Correct obvious homophone errors.
-      5. CRITICAL: Do NOT summarize. Do NOT change the wording or meaning. Keep every sentence originally spoken.
-      6. Output only the refined transcript.
+      You are a senior editor for the Living Stream Ministry (LSM).
+      You are refining a raw transcript merged from audio segments.
 
-      Text to refine:
+      **Input Text**:
       ${fullText}
+
+      **Your Mission**:
+      Refine the text into a readable, accurate ministry transcript while preserving the original meaning and speaker flow.
+
+      **Strict Editing Rules**:
+      1. **Speaker Formatting**:
+         - Ensure speaker labels (e.g., [Speaker 1], [Speaker 2]) are clearly separated by newlines.
+         - If the same speaker continues across a chunk break, merge the text seamlessly.
+      2. **Terminology Correction**:
+         - **CRITICAL**: Standardize all terms according to the Recovery Version Bible and LSM publications.
+         - Correct common homophone errors in ministry context (e.g., ensure "神" vs "人", "靈" vs "零").
+      3. **Punctuation & Flow**:
+         - Fix broken sentences at connection points.
+         - Convert spoken rhythm into proper written punctuation.
+      4. **Fidelity**:
+         - Do NOT summarize. Do NOT delete content. Keep the full message.
+         - Remove ONLY pure stuttering or meaningless fillers.
+      5. **Language**:
+         - **MUST output in Traditional Chinese (繁體中文)**.
+
+      **Output**:
+      Return ONLY the refined transcript text.
     `;
 
      try {
@@ -91,7 +125,7 @@ export const refineAndMergeTranscript = async (fullText: string): Promise<string
 
 export const translateTranscript = async (text: string): Promise<string> => {
     const ai = getAiClient();
-    const modelId = "gemini-3-pro-preview";
+    const modelId = getModelId();
 
     const prompt = `
       You are a professional translator specializing in Watchman Nee and Witness Lee publications.
@@ -104,7 +138,8 @@ export const translateTranscript = async (text: string): Promise<string> => {
       1. **Authority**: Strictly adhere to terminology in the Recovery Version Bible, Life-studies, and Collected Works of Watchman Nee/Witness Lee (LSM/TWGBR).
       2. **Exclusion**: Do NOT use Union Version (和合本) or general Christian terms if they differ from the Recovery Version.
       3. **Fidelity**: Translate sentence by sentence. Do NOT summarize.
-      4. **Output**: Output ONLY the translation.
+      4. **Language**: Use Traditional Chinese (繁體中文) for all Chinese characters.
+      5. **Output**: Output ONLY the translation.
 
       Text to translate:
       ${text}
@@ -124,7 +159,7 @@ export const translateTranscript = async (text: string): Promise<string> => {
 
 export const formatToLSMStyle = async (text: string): Promise<string> => {
     const ai = getAiClient();
-    const modelId = "gemini-3-pro-preview";
+    const modelId = getModelId();
 
     const prompt = `
       You are an editor for Living Stream Ministry (LSM). 
@@ -144,6 +179,7 @@ export const formatToLSMStyle = async (text: string): Promise<string> => {
          - Level 4: margin-left: 60px; font-family: 'Times New Roman', 'PMingLiU', serif;
       4. Use a Serif font stack ('Times New Roman', 'PMingLiU', serif) for all text.
       5. Do NOT change the core content words, just structure them.
+      6. **Language Requirement: Ensure all Chinese text is output in Traditional Chinese (繁體中文).**
 
       Text to format:
       ${text}
@@ -163,7 +199,7 @@ export const formatToLSMStyle = async (text: string): Promise<string> => {
 
 export const enrichWithLinks = async (text: string): Promise<string> => {
     const ai = getAiClient();
-    const modelId = "gemini-3-pro-preview";
+    const modelId = getModelId();
 
     const prompt = `
       You are a research assistant for the Recovery Version Bible and Ministry Books.
@@ -185,6 +221,7 @@ export const enrichWithLinks = async (text: string): Promise<string> => {
          - If Greek or Hebrew words are mentioned, link them to a general search on the respective sites.
 
       4. Return the text fully formatted in HTML, preserving the original structure but adding <a> tags with target="_blank" and style="color: #2563eb; text-decoration: underline;".
+      5. **Language Requirement: Ensure all Chinese text remains in (or is converted to) Traditional Chinese (繁體中文).**
 
       Text to enrich:
       ${text}
