@@ -1,5 +1,5 @@
 import React, { useState, useRef } from 'react';
-import { Upload, FileAudio, Play, Download, RefreshCw, AlertCircle, CheckCircle2, Type, Languages, Sparkles, FileText, BookOpen, Layout, Trash2, Layers, Plus } from 'lucide-react';
+import { Upload, FileAudio, Play, Download, RefreshCw, AlertCircle, CheckCircle2, Type, Languages, Sparkles, FileText, BookOpen, Layout, Trash2, Layers, Plus, ClipboardPen } from 'lucide-react';
 import { decodeAndResampleAudio, sliceAudioBufferSmart } from '../services/audioService';
 import { transcribeAudioChunk, refineAndMergeTranscript, translateTranscript, formatToLSMStyle, summarizeMeeting, enrichWithLinks } from '../services/geminiService';
 import { ChunkResult, ProcessingState, TranscribeStatus, FileJob } from '../types';
@@ -14,6 +14,43 @@ export const Transcriber: React.FC = () => {
   const [userInstructions, setUserInstructions] = useState(''); // 儲存使用者的修正指令
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleCreateTextJob = () => {
+    const newId = Math.random().toString(36).substring(7);
+    const timestamp = new Date().toLocaleString('zh-TW', { hour12: false, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+    
+    const newJob: FileJob = {
+        id: newId,
+        // 建立一個虛擬的 File 物件 (這是關鍵，為了符合 TypeScript 類型)
+        file: new File([""], `手動輸入_${timestamp}.txt`, { type: "text/plain" }),
+        metadata: {
+            fileName: `手動輸入_${timestamp}`, // 檔名
+            size: 0,
+            type: "text/plain",
+            duration: 0,
+        },
+        state: {
+            // [關鍵] 直接設為 COMPLETED，這樣編輯器就會解鎖，讓您可以貼上文字
+            status: TranscribeStatus.COMPLETED, 
+            progress: 100,
+            totalChunks: 0,
+            completedChunks: 0,
+            currentOperation: '就緒 (請貼上文字)',
+        },
+        chunks: [],
+        finalTranscript: '', // 預設為空，等待您貼上
+        translatedTranscript: '',
+        formattedHtml: '',
+        enrichedHtml: '',
+        isTranslating: false,
+        isFormatting: false,
+        isEnriching: false,
+    };
+
+    setJobs(prev => [newJob, ...prev]); // 加到列表最前面
+    setActiveJobId(newId); // 自動選取
+    setViewMode('edit'); // 切換到編輯模式
+  };
 
   const updateJob = (id: string, updates: Partial<FileJob> | ((prev: FileJob) => Partial<FileJob>)) => {
     setJobs(prevJobs => prevJobs.map(job => {
@@ -396,19 +433,38 @@ export const Transcriber: React.FC = () => {
       
       {/* Sidebar */}
       <div className="w-full lg:w-96 h-1/3 lg:h-full flex-shrink-0 flex flex-col bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
+        
+        {/* Sidebar Header [修改處] */}
         <div className="p-4 border-b border-gray-100 bg-gray-50 flex items-center justify-between">
            <h2 className="font-semibold text-gray-700 flex items-center gap-2">
              <Layers className="w-5 h-5 text-blue-600" /> 檔案列表 ({jobs.length})
            </h2>
-           <button 
-             onClick={() => fileInputRef.current?.click()}
-             className="p-1.5 bg-blue-100 text-blue-600 rounded-lg hover:bg-blue-200 transition-colors"
-           >
-             <Plus className="w-4 h-4" />
-           </button>
+           
+           {/* [修改] 使用 flex gap-2 將新按鈕與舊按鈕包在一起 */}
+           <div className="flex gap-2">
+               {/* 新增：綠色筆記按鈕 */}
+               <button 
+                 onClick={handleCreateTextJob}
+                 className="p-1.5 bg-green-100 text-green-600 rounded-lg hover:bg-green-200 transition-colors"
+                 title="新增文字筆記/貼上逐字稿"
+               >
+                 <ClipboardPen className="w-4 h-4" />
+               </button>
+
+               {/* 原本的：藍色上傳按鈕 */}
+               <button 
+                 onClick={() => fileInputRef.current?.click()}
+                 className="p-1.5 bg-blue-100 text-blue-600 rounded-lg hover:bg-blue-200 transition-colors"
+                 title="上傳錄音檔"
+               >
+                 <Plus className="w-4 h-4" />
+               </button>
+           </div>
+           
            <input type="file" ref={fileInputRef} onChange={handleFileChange} accept="audio/*,video/*" multiple className="hidden" />
         </div>
 
+        {/* File List (以下完全保留原樣) */}
         <div className="flex-1 overflow-y-auto p-3 space-y-2">
             {jobs.length === 0 && (
                 <div className="h-full flex flex-col items-center justify-center text-gray-400 p-4 text-center">
