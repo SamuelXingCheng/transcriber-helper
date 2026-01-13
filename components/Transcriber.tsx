@@ -417,59 +417,97 @@ export const Transcriber: React.FC = () => {
          ) : (
              <>
                  {/* Toolbar */}
-                 <div className="p-3 border-b border-gray-100 bg-gray-50 flex flex-wrap justify-between items-center gap-3">
-                    <div className="flex flex-1 items-center space-x-2 overflow-x-auto no-scrollbar">
-                        <button onClick={() => setViewMode('edit')} className={`px-3 py-2 text-sm font-medium rounded-lg flex items-center gap-2 flex-shrink-0 ${viewMode === 'edit' ? 'bg-white text-blue-600 shadow-sm ring-1 ring-gray-200' : 'text-gray-600 hover:bg-gray-100'}`}>
-                            <Type className="w-4 h-4" /> 編輯模式
-                        </button>
-                        <button onClick={handleFormatLSM} disabled={activeJob.isFormatting} className={`px-3 py-2 text-sm font-medium rounded-lg flex items-center gap-2 flex-shrink-0 ${viewMode === 'format' ? 'bg-white text-blue-600 shadow-sm ring-1 ring-gray-200' : 'text-gray-600 hover:bg-gray-100'}`}>
-                            {activeJob.isFormatting ? <RefreshCw className="w-4 h-4 animate-spin"/> : <Layout className="w-4 h-4" />} LSM 排版
-                        </button>
-                        <button onClick={handleEnrichLinks} disabled={activeJob.isEnriching} className={`px-3 py-2 text-sm font-medium rounded-lg flex items-center gap-2 flex-shrink-0 ${viewMode === 'split' ? 'bg-white text-blue-600 shadow-sm ring-1 ring-gray-200' : 'text-gray-600 hover:bg-gray-100'}`}>
-                            {activeJob.isEnriching ? <RefreshCw className="w-4 h-4 animate-spin"/> : <BookOpen className="w-4 h-4" />} 經文對照
-                        </button>
-                        <div className="w-px h-6 bg-gray-300 mx-2 self-center flex-shrink-0"></div>
-                        <button onClick={handleTranslate} disabled={activeJob.isTranslating || !!activeJob.translatedTranscript} className={`px-3 py-2 text-sm font-medium rounded-lg flex items-center gap-2 flex-shrink-0 ${activeJob.translatedTranscript ? 'text-green-600 bg-green-50' : 'text-gray-600 hover:bg-gray-100'}`}>
-                            {activeJob.isTranslating ? <RefreshCw className="w-4 h-4 animate-spin"/> : <Languages className="w-4 h-4" />} {activeJob.translatedTranscript ? '已翻譯' : '翻譯'}
-                        </button>
+                  <div className="p-3 border-b border-gray-100 bg-gray-50 flex flex-wrap justify-between items-center gap-3">
+                      {/* 修改 1: 加入 lg:overflow-visible 解除電腦版的遮罩，讓 Tooltip 能顯示 */}
+                      <div className="flex flex-1 items-center space-x-2 overflow-x-auto lg:overflow-visible no-scrollbar">
+                          
+                          {/* 編輯模式 Tooltip */}
+                          <div className="relative group flex items-center">
+                              <button onClick={() => setViewMode('edit')} className={`px-3 py-2 text-sm font-medium rounded-lg flex items-center gap-2 flex-shrink-0 ${viewMode === 'edit' ? 'bg-white text-blue-600 shadow-sm ring-1 ring-gray-200' : 'text-gray-600 hover:bg-gray-100'}`}>
+                                  <Type className="w-4 h-4" /> 編輯模式
+                              </button>
+                              {/* 修改 2: 改為 top-full (往下), mt-2, 箭頭改為 bottom-full (向上指) */}
+                              <div className="absolute top-full mt-2 left-0 hidden group-hover:block w-48 bg-gray-800 text-white text-[10px] rounded py-1.5 px-3 shadow-xl z-50 pointer-events-none text-left leading-relaxed">
+                                  自由修改聽抄文字內容，修改後會同步更新至其他模式
+                                  <div className="absolute bottom-full left-4 border-4 border-transparent border-b-gray-800"></div>
+                              </div>
+                          </div>
 
-                        <div className="ml-4 flex items-center gap-2 flex-shrink-0">
-                            {activeJob.state.status === TranscribeStatus.PROCESSING && activeJob.state.completedChunks < activeJob.state.totalChunks && (
-                                <span className="flex items-center gap-1.5 bg-amber-50 text-amber-700 px-3 py-1 rounded-full text-xs font-bold border border-amber-200 animate-pulse">
-                                    <RefreshCw className="w-3 h-3 animate-spin" />
-                                    辨識中 ({activeJob.state.completedChunks}/{activeJob.state.totalChunks})
-                                </span>
-                            )}
-                            
-                            {activeJob.state.status === TranscribeStatus.PROCESSING && activeJob.state.completedChunks === activeJob.state.totalChunks && (
-                                <span className="flex items-center gap-1.5 bg-blue-50 text-blue-700 px-3 py-1 rounded-full text-xs font-bold border border-blue-200 animate-pulse">
-                                    <Sparkles className="w-3 h-3" />
-                                    校對中...
-                                </span>
-                            )}
+                          {/* LSM 排版 Tooltip */}
+                          <div className="relative group flex items-center">
+                              <button onClick={handleFormatLSM} disabled={activeJob.isFormatting} className={`px-3 py-2 text-sm font-medium rounded-lg flex items-center gap-2 flex-shrink-0 ${viewMode === 'format' ? 'bg-white text-blue-600 shadow-sm ring-1 ring-gray-200' : 'text-gray-600 hover:bg-gray-100'}`}>
+                                  {activeJob.isFormatting ? <RefreshCw className="w-4 h-4 animate-spin"/> : <Layout className="w-4 h-4" />} LSM 排版
+                              </button>
+                              <div className="absolute top-full mt-2 left-0 hidden group-hover:block w-48 bg-gray-800 text-white text-[10px] rounded py-1.5 px-3 shadow-xl z-50 pointer-events-none text-left leading-relaxed">
+                                  自動偵測邏輯段落，套用標準羅馬數字與英文字母大綱樣式
+                                  <div className="absolute bottom-full left-4 border-4 border-transparent border-b-gray-800"></div>
+                              </div>
+                          </div>
 
-                            {activeJob.state.status === TranscribeStatus.COMPLETED && (
-                                <span className="flex items-center gap-1.5 bg-green-50 text-green-700 px-3 py-1 rounded-full text-xs font-bold border border-green-200">
-                                    <CheckCircle2 className="w-3 h-3" />
-                                    完成
-                                </span>
-                            )}
+                          {/* 經文對照 Tooltip */}
+                          <div className="relative group flex items-center">
+                              <button onClick={handleEnrichLinks} disabled={activeJob.isEnriching} className={`px-3 py-2 text-sm font-medium rounded-lg flex items-center gap-2 flex-shrink-0 ${viewMode === 'split' ? 'bg-white text-blue-600 shadow-sm ring-1 ring-gray-200' : 'text-gray-600 hover:bg-gray-100'}`}>
+                                  {activeJob.isEnriching ? <RefreshCw className="w-4 h-4 animate-spin"/> : <BookOpen className="w-4 h-4" />} 經文對照
+                              </button>
+                              <div className="absolute top-full mt-2 left-0 hidden group-hover:block w-48 bg-gray-800 text-white text-[10px] rounded py-1.5 px-3 shadow-xl z-50 pointer-events-none text-left leading-relaxed">
+                                  生成恢復本聖經、生命讀經與職事書報的自動連結與對照
+                                  <div className="absolute bottom-full left-4 border-4 border-transparent border-b-gray-800"></div>
+                              </div>
+                          </div>
+
+                          <div className="w-px h-6 bg-gray-300 mx-2 self-center flex-shrink-0"></div>
+
+                          {/* 翻譯 Tooltip */}
+                          <div className="relative group flex items-center">
+                              <button onClick={handleTranslate} disabled={activeJob.isTranslating || !!activeJob.translatedTranscript} className={`px-3 py-2 text-sm font-medium rounded-lg flex items-center gap-2 flex-shrink-0 ${activeJob.translatedTranscript ? 'text-green-600 bg-green-50' : 'text-gray-600 hover:bg-gray-100'}`}>
+                                  {activeJob.isTranslating ? <RefreshCw className="w-4 h-4 animate-spin"/> : <Languages className="w-4 h-4" />} {activeJob.translatedTranscript ? '已翻譯' : '翻譯'}
+                              </button>
+                              <div className="absolute top-full mt-2 left-0 hidden group-hover:block w-48 bg-gray-800 text-white text-[10px] rounded py-1.5 px-3 shadow-xl z-50 pointer-events-none text-left leading-relaxed">
+                                  使用專為恢復本與職事術語優化的 AI 模型進行中英互譯
+                                  <div className="absolute bottom-full left-4 border-4 border-transparent border-b-gray-800"></div>
+                              </div>
+                          </div>
+
+                          <div className="ml-4 flex items-center gap-2 flex-shrink-0">
+                              {/* ... 狀態顯示區塊 (保留原樣) ... */}
+                              {activeJob.state.status === TranscribeStatus.PROCESSING && activeJob.state.completedChunks < activeJob.state.totalChunks && (
+                                  <span className="flex items-center gap-1.5 bg-amber-50 text-amber-700 px-3 py-1 rounded-full text-xs font-bold border border-amber-200 animate-pulse">
+                                      <RefreshCw className="w-3 h-3 animate-spin" />
+                                      辨識中 ({activeJob.state.completedChunks}/{activeJob.state.totalChunks})
+                                  </span>
+                              )}
+                              
+                              {activeJob.state.status === TranscribeStatus.PROCESSING && activeJob.state.completedChunks === activeJob.state.totalChunks && (
+                                  <span className="flex items-center gap-1.5 bg-blue-50 text-blue-700 px-3 py-1 rounded-full text-xs font-bold border border-blue-200 animate-pulse">
+                                      <Sparkles className="w-3 h-3" />
+                                      校對中...
+                                  </span>
+                              )}
+
+                              {activeJob.state.status === TranscribeStatus.COMPLETED && (
+                                  <span className="flex items-center gap-1.5 bg-green-50 text-green-700 px-3 py-1 rounded-full text-xs font-bold border border-green-200">
+                                      <CheckCircle2 className="w-3 h-3" />
+                                      完成
+                                  </span>
+                              )}
+                          </div>
+                      </div>
+
+                      {/* 匯出按鈕 (移除 Tooltip，保留下拉選單) */}
+                      <div className="relative group flex-shrink-0">
+                        <button className="px-4 py-2 text-sm font-medium bg-blue-600 text-white rounded hover:bg-blue-700 flex items-center gap-2 shadow-sm">
+                            <Download className="w-4 h-4" /> 匯出
+                        </button>
+                        {/* 下拉選單保留 */}
+                        <div className="absolute right-0 top-full pt-2 w-48 hidden group-hover:block z-50">
+                            <div className="bg-white rounded-md shadow-lg py-1 border border-gray-100">
+                                <button onClick={() => handleExport('txt')} className="block w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">文字檔 (.txt)</button>
+                                <button onClick={() => handleExport('doc')} className="block w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">Word (.doc)</button>
+                                <button onClick={() => handleExport('pdf')} className="block w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">PDF (列印)</button>
+                            </div>
                         </div>
                     </div>
-
-                    <div className="relative group flex-shrink-0">
-                       <button className="px-4 py-2 text-sm font-medium bg-blue-600 text-white rounded hover:bg-blue-700 flex items-center gap-2 shadow-sm">
-                          <Download className="w-4 h-4" /> 匯出
-                       </button>
-                       <div className="absolute right-0 top-full pt-2 w-48 hidden group-hover:block z-50">
-                          <div className="bg-white rounded-md shadow-lg py-1 border border-gray-100">
-                              <button onClick={() => handleExport('txt')} className="block w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">文字檔 (.txt)</button>
-                              <button onClick={() => handleExport('doc')} className="block w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">Word (.doc)</button>
-                              <button onClick={() => handleExport('pdf')} className="block w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">PDF (列印)</button>
-                          </div>
-                       </div>
-                   </div>
-                 </div>
+                  </div>
 
                  {/* Content Area */}
                  <div className="flex-1 relative overflow-hidden flex bg-gray-50/50">
