@@ -44,6 +44,7 @@ export interface FileJob {
   translatedTranscript: string;
   formattedHtml: string;
   enrichedHtml: string;
+  summaryHtml: string;
   
   // Flags
   isTranslating: boolean;

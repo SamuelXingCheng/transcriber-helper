@@ -228,30 +228,30 @@ export const enrichWithLinks = async (text: string): Promise<string> => {
  */
 export const summarizeMeeting = async (text: string): Promise<string> => {
     const prompt = `
-      You are a senior secretary for Living Stream Ministry (LSM). 
-      Task: Summarize the following meeting transcript into a structured 'Conference Outline' while preserving the spiritual essence.
+      You are a senior secretary for the Lord's Recovery. 
+      Task: Create a comprehensive "Meeting Summary and Minutes" from the provided transcript.
 
-      Requirements:
-      1. **Summarization**: Extract core spiritual truths, key fellowship points, and any specific action items or decisions made.
-      2. **Structure**: Organize the summary using standard LSM hierarchical numbering:
-         - Level 1: Roman Numerals (I., II.) - <b>Bold</b>
-         - Level 2: Capital Letters (A., B.)
-         - Level 3: Arabic Numerals (1., 2.)
-      3. **Action Items**: If there are specific tasks mentioned, include a dedicated section titled "IV. 具體服事安排與交通" (or similar).
-      4. **Formatting**: Return ONLY the HTML string with these styles:
-         - Level 1: margin-left: 0px; font-weight: bold; font-family: 'Times New Roman', 'PMingLiU', serif;
-         - Level 2: margin-left: 20px; font-family: 'Times New Roman', 'PMingLiU', serif;
-         - Level 3: margin-left: 40px; font-family: 'Times New Roman', 'PMingLiU', serif;
-      5. **Language**: Output MUST be in Traditional Chinese (繁體中文).
+      **Structure of the Summary**:
+      I. **屬靈真理與交通負擔 (Spiritual Truths & Fellowship Burdens)**: Summarize the main vision and ministry points released during the meeting.
+      II. **重要對話過程摘要 (Key Discussion Processes)**: Summarize the dialogue between different speakers. Highlight divergent views or collective burdens that led to the final decision. Use format: "[Speaker X]: Key point".
+      III. **定案結果與共識 (Decisions & Consensuses)**: Clearly list what was decided for each topic.
+      IV. **具體服事安排 (Action Items)**: 
+          - Task Description
+          - Person in Charge (if mentioned)
+          - Expected Timeline (if mentioned)
 
-      Text to summarize:
+      **Formatting Rules**:
+      1. Use LSM standard hierarchical numbering: I., A., 1., a.
+      2. Return ONLY HTML string with:
+         - Level 1: <b>Bold</b>, margin-left: 0px.
+         - Level 2: margin-left: 20px.
+         - Level 3: margin-left: 40px.
+      3. **Language**: Traditional Chinese (繁體中文).
+      4. **Terminology**: Strictly use LSM standard terms (e.g., 交通, 經綸, 相調).
+
+      Transcript to process:
       ${text}
     `;
 
-    try {
-        return await callGeminiProxy('format', { prompt });
-    } catch (e) {
-        console.error("Summarization Error:", e);
-        throw e;
-    }
+    return callGeminiProxy('format', { prompt });
 };

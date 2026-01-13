@@ -196,28 +196,39 @@ export const Transcriber: React.FC = () => {
   };
 
   // --- Action Handlers ---
-
   const handleMeetingSummary = async () => {
     if (!activeJobId) return;
     const job = jobs.find(j => j.id === activeJobId);
     if (!job) return;
 
-    // 以翻譯後的文字優先，否則用原始文字
+    // [優化 1]：檢查暫存
+    // 如果之前已經生成過總結 (summaryHtml)，直接把它拿來顯示 (formattedHtml)
+    if (job.summaryHtml) { 
+        updateJob(activeJobId, { formattedHtml: job.summaryHtml });
+        setViewMode('format'); 
+        return;
+    }
+
     const sourceText = job.translatedTranscript || job.finalTranscript;
     if (!sourceText) return;
 
-    // 使用 isFormatting 狀態來控制讀取動畫
-    updateJob(activeJobId, { isFormatting: true }); 
+    updateJob(activeJobId, { isFormatting: true });
     try {
         const html = await summarizeMeeting(sourceText); 
-        updateJob(activeJobId, { formattedHtml: html }); // 存入 formattedHtml 供格式化視圖顯示
-        setViewMode('format'); // 自動切換至格式化視圖
-    } catch (error) {
-        alert("生成總結失敗，請檢查網路連線");
+        
+        // [優化 2]：API 回來後，同時存入「備份欄位」與「顯示欄位」
+        updateJob(activeJobId, { 
+            summaryHtml: html,      // 存入專屬欄位 (下次就不會重跑)
+            formattedHtml: html     // 存入顯示欄位 (讓畫面立刻更新)
+        });
+        setViewMode('format');
+    } catch (error: any) {
+        console.error(error);
+        alert(`生成總結失敗: ${error.message}`);
     } finally {
         updateJob(activeJobId, { isFormatting: false });
     }
-  };
+};
 
   const handleTranslate = async () => {
     if (!activeJobId) return;
