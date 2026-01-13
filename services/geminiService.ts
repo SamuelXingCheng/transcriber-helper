@@ -43,34 +43,41 @@ export const transcribeAudioChunk = async (
 ): Promise<string> => {
   const base64Data = await blobToBase64(audioBlob);
   
-  // 保持原本的 Prompt 邏輯
+  // [中英雙語優化版 Prompt]
   const prompt = `
-    You are a professional transcriber for Living Stream Ministry (LSM).
-    Your task is to transcribe the audio exactly as spoken, distinguishing between speakers.
+    You are a professional multilingual transcriber for Living Stream Ministry (LSM).
+    Your task is to transcribe the audio exactly as spoken, with high accuracy in spiritual terminology.
 
-    **Context**:
-    - This audio contains ministry messages or fellowship related to the Lord's Recovery.
-    - Specific Terminology Source: Recovery Version Bible (恢復本聖經), Life-studies (生命讀經), and the ministry of Watchman Nee and Witness Lee.
+    **Step 1: Language Detection**
+    - Automatically detect if the primary language is English or Chinese.
+    - If English: Output the transcript in **English**.
+    - If Chinese: Output the transcript in **Traditional Chinese (繁體中文)**.
+    - If the audio is bilingual (code-switching), preserve both languages as spoken.
 
-    **Instructions**:
-    1. **Speaker Identification**: 
-       - Detect distinct voices. Label them as **[Speaker 1]**, **[Speaker 2]**, etc.
-       - Start a new line whenever the speaker changes.
-    2. **Language**: 
-       - Output MUST be in **Traditional Chinese (繁體中文)** if the audio is Chinese.
-       - Do NOT use Simplified Chinese.
-    3. **Terminology Accuracy**:
-       - Use specific ministry terms (e.g., use "交通" instead of "交流", "盡功用" instead of "發揮功能", "相調" instead of "混合").
-       - Listen carefully for biblical names and terms according to the Recovery Version.
-    4. **Verbatim Transcription**:
-       - Transcribe exactly what is said. 
-       - Ignore meaningless filler words (like "um", "uh") unless they add emphasis.
-       - Keep the original sentence structure.
+    **Step 2: Speaker Identification**
+    - Detect distinct voices. Label them as **[Speaker 1]**, **[Speaker 2]**, etc.
+    - Start a new line whenever the speaker changes.
 
-    ${previousContext ? `**Previous Context** (for continuity only, do not repeat): "...${previousContext.slice(-200)}"` : ''}
+    **Step 3: Terminology Accuracy (Crucial)**
+    - **Source Material**: Refer to the Recovery Version Bible, Life-studies, and the ministry of Watchman Nee and Witness Lee.
+    - **For English Transcription**:
+        - Use standard LSM terms: "Economy of God", "Dispensation", "Divine-human mingling", "Fellowship", "Functioning", "Blending", "Body of Christ".
+        - Ensure biblical names follow the Recovery Version (e.g., "Timothy", "Ephesians").
+    - **For Chinese Transcription (Traditional Chinese ONLY)**:
+        - 必須使用職事專有名詞：使用「交通」而非「交流」；使用「盡功用」而非「發揮功能」；使用「相調」而非「混合」；使用「神聖經綸」而非「上帝的計劃」。
+        - 聖經書卷與人名必須符合《恢復本聖經》（如：馬太福音、以弗所書）。
+
+    **Step 4: Transcription Rules**
+    - **Verbatim**: Transcribe exactly what is said. 
+    - **Clean Verbatim**: Omit fillers like "uh", "um", "ah" unless they carry specific emotional weight.
+    - **Punctuation**: Use appropriate punctuation to reflect the speaker's rhythm and intent.
+
+    **Step 5: Continuity**
+    ${previousContext ? `**Previous Context** (use for continuity, do not repeat): "...${previousContext.slice(-200)}"` : ''}
+
+    **Output**: Return ONLY the transcribed text.
   `;
 
-  // 改用代理呼叫
   return callGeminiProxy('transcribe', {
     audioBase64: base64Data,
     prompt: prompt
@@ -213,5 +220,38 @@ export const enrichWithLinks = async (text: string): Promise<string> => {
     } catch (e) {
         console.error("Linking Error:", e);
         return text;
+    }
+};
+
+/**
+ * [新增方法] 會議總結：提煉重點並轉為大綱格式
+ */
+export const summarizeMeeting = async (text: string): Promise<string> => {
+    const prompt = `
+      You are a senior secretary for Living Stream Ministry (LSM). 
+      Task: Summarize the following meeting transcript into a structured 'Conference Outline' while preserving the spiritual essence.
+
+      Requirements:
+      1. **Summarization**: Extract core spiritual truths, key fellowship points, and any specific action items or decisions made.
+      2. **Structure**: Organize the summary using standard LSM hierarchical numbering:
+         - Level 1: Roman Numerals (I., II.) - <b>Bold</b>
+         - Level 2: Capital Letters (A., B.)
+         - Level 3: Arabic Numerals (1., 2.)
+      3. **Action Items**: If there are specific tasks mentioned, include a dedicated section titled "IV. 具體服事安排與交通" (or similar).
+      4. **Formatting**: Return ONLY the HTML string with these styles:
+         - Level 1: margin-left: 0px; font-weight: bold; font-family: 'Times New Roman', 'PMingLiU', serif;
+         - Level 2: margin-left: 20px; font-family: 'Times New Roman', 'PMingLiU', serif;
+         - Level 3: margin-left: 40px; font-family: 'Times New Roman', 'PMingLiU', serif;
+      5. **Language**: Output MUST be in Traditional Chinese (繁體中文).
+
+      Text to summarize:
+      ${text}
+    `;
+
+    try {
+        return await callGeminiProxy('format', { prompt });
+    } catch (e) {
+        console.error("Summarization Error:", e);
+        throw e;
     }
 };

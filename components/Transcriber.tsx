@@ -1,7 +1,7 @@
 import React, { useState, useRef } from 'react';
 import { Upload, FileAudio, Play, Download, RefreshCw, AlertCircle, CheckCircle2, Type, Languages, Sparkles, FileText, BookOpen, Layout, Trash2, Layers, Plus } from 'lucide-react';
 import { decodeAndResampleAudio, sliceAudioBufferSmart } from '../services/audioService';
-import { transcribeAudioChunk, refineAndMergeTranscript, translateTranscript, formatToLSMStyle, enrichWithLinks } from '../services/geminiService';
+import { transcribeAudioChunk, refineAndMergeTranscript, translateTranscript, formatToLSMStyle, summarizeMeeting, enrichWithLinks } from '../services/geminiService';
 import { ChunkResult, ProcessingState, TranscribeStatus, FileJob } from '../types';
 
 const CHUNK_DURATION_SECONDS = 300; // 5 minutes
@@ -196,6 +196,29 @@ export const Transcriber: React.FC = () => {
   };
 
   // --- Action Handlers ---
+
+  const handleMeetingSummary = async () => {
+    if (!activeJobId) return;
+    const job = jobs.find(j => j.id === activeJobId);
+    if (!job) return;
+
+    // 以翻譯後的文字優先，否則用原始文字
+    const sourceText = job.translatedTranscript || job.finalTranscript;
+    if (!sourceText) return;
+
+    // 使用 isFormatting 狀態來控制讀取動畫
+    updateJob(activeJobId, { isFormatting: true }); 
+    try {
+        const html = await summarizeMeeting(sourceText); 
+        updateJob(activeJobId, { formattedHtml: html }); // 存入 formattedHtml 供格式化視圖顯示
+        setViewMode('format'); // 自動切換至格式化視圖
+    } catch (error) {
+        alert("生成總結失敗，請檢查網路連線");
+    } finally {
+        updateJob(activeJobId, { isFormatting: false });
+    }
+  };
+
   const handleTranslate = async () => {
     if (!activeJobId) return;
     const job = jobs.find(j => j.id === activeJobId);
@@ -434,12 +457,27 @@ export const Transcriber: React.FC = () => {
                           </div>
 
                           {/* LSM 排版 Tooltip */}
-                          <div className="relative group flex items-center">
+                          {/* <div className="relative group flex items-center">
                               <button onClick={handleFormatLSM} disabled={activeJob.isFormatting} className={`px-3 py-2 text-sm font-medium rounded-lg flex items-center gap-2 flex-shrink-0 ${viewMode === 'format' ? 'bg-white text-blue-600 shadow-sm ring-1 ring-gray-200' : 'text-gray-600 hover:bg-gray-100'}`}>
                                   {activeJob.isFormatting ? <RefreshCw className="w-4 h-4 animate-spin"/> : <Layout className="w-4 h-4" />} LSM 排版
                               </button>
                               <div className="absolute top-full mt-2 left-0 hidden group-hover:block w-48 bg-gray-800 text-white text-[10px] rounded py-1.5 px-3 shadow-xl z-50 pointer-events-none text-left leading-relaxed">
                                   自動偵測邏輯段落，套用標準羅馬數字與英文字母大綱樣式
+                                  <div className="absolute bottom-full left-4 border-4 border-transparent border-b-gray-800"></div>
+                              </div>
+                          </div> */}
+
+                          {/* 會議總結 Tooltip */}
+                          <div className="relative group flex items-center">
+                              <button 
+                                  onClick={handleMeetingSummary} 
+                                  disabled={activeJob.isFormatting} 
+                                  className={`px-3 py-2 text-sm font-medium rounded-lg flex items-center gap-2 flex-shrink-0 ${viewMode === 'format' ? 'text-blue-600' : 'text-gray-600 hover:bg-gray-100'}`}
+                              >
+                                  {activeJob.isFormatting ? <RefreshCw className="w-4 h-4 animate-spin"/> : <Sparkles className="w-4 h-4" />} 會議總結
+                              </button>
+                              <div className="absolute top-full mt-2 left-0 hidden group-hover:block w-48 bg-gray-800 text-white text-[10px] rounded py-1.5 px-3 shadow-xl z-50 pointer-events-none text-left leading-relaxed">
+                                  提煉會議內容中的屬靈要點與服事安排，生成精簡的標準大綱
                                   <div className="absolute bottom-full left-4 border-4 border-transparent border-b-gray-800"></div>
                               </div>
                           </div>
