@@ -179,25 +179,55 @@ export const Transcriber: React.FC = () => {
     const job = jobs.find(j => j.id === jobId);
     if (!job || !job.finalTranscript) return;
 
+    // 1. 進入處理狀態
     updateJobState(jobId, { 
         status: TranscribeStatus.PROCESSING, 
-        currentOperation: '正在根據您的指示優化全篇文稿...' 
+        currentOperation: '正在修正文稿並同步更新總結...' 
     });
     
     try {
+        // 第一階段：根據指令優化底層文稿 (確保基礎資料正確)
         const refinedText = await refineAndMergeTranscript(job.finalTranscript, userInstructions);
-        updateJob(jobId, { finalTranscript: refinedText });
+        
+        // 準備更新物件
+        let updates: Partial<FileJob> = {
+            finalTranscript: refinedText,
+            lsmHtml: '', // 清除舊的排版暫存
+        };
+
+        // 第二階段：智慧自動更新
+        // 如果使用者目前正在看「會議總結」模式，自動觸發重新總結
+        if (viewMode === 'format') {
+            updateJobState(jobId, { currentOperation: '文稿已修正，正在重新生成總結...' });
+            
+            // 根據修正後的文字重新生成總結
+            const newSummary = await summarizeMeeting(refinedText);
+            
+            updates.summaryHtml = newSummary;   // 更新總結暫存
+            updates.formattedHtml = newSummary; // 更新目前畫面顯示
+        } else {
+            // 如果是在編輯模式，則清空總結暫存，確保下次點擊時會重新生成
+            updates.summaryHtml = '';
+            updates.formattedHtml = '';
+        }
+
+        // 一次性更新所有欄位
+        updateJob(jobId, updates);
+        
         updateJobState(jobId, { 
             status: TranscribeStatus.COMPLETED, 
-            currentOperation: '完成' 
+            currentOperation: '優化完成！文稿與總結已同步更新。' 
         });
+        
+        // 清空指令框
         setUserInstructions(''); 
+
     } catch (error: any) {
         updateJobState(jobId, { 
-            status: TranscribeStatus.AWAITING_REFINEMENT,
-            error: "潤稿失敗，請重試" 
+            status: TranscribeStatus.COMPLETED, // 即使失敗也維持在完成狀態，方便重試
+            error: "同步優化失敗" 
         });
-        alert(`優化失敗: ${error.message}`);
+        alert(`同步優化失敗: ${error.message}`);
     }
   };
 
