@@ -234,35 +234,54 @@ export const enrichWithLinks = async (text: string): Promise<string> => {
     }
 };
 
-/**
- * [新增方法] 會議總結：提煉重點並轉為大綱格式
- */
+// services/geminiService.ts
+
 export const summarizeMeeting = async (text: string): Promise<string> => {
     const prompt = `
       You are a senior secretary for the Lord's Recovery. 
-      Task: Create a comprehensive "Meeting Summary and Minutes" from the provided transcript.
+      Task: Create formal "Meeting Minutes" from the provided transcript, strictly following the chronological order.
 
-      **Structure of the Summary**:
-      I. **屬靈真理與交通負擔 (Spiritual Truths & Fellowship Burdens)**: Summarize the main vision and ministry points released during the meeting.
-      II. **重要對話過程摘要 (Key Discussion Processes)**: Summarize the dialogue between different speakers. Highlight divergent views or collective burdens that led to the final decision. Use format: "[Speaker X]: Key point".
-      III. **定案結果與共識 (Decisions & Consensuses)**: Clearly list what was decided for each topic.
-      IV. **具體服事安排 (Action Items)**: 
-          - Task Description
-          - Person in Charge (if mentioned)
-          - Expected Timeline (if mentioned)
+      **CRITICAL RULES (Anti-Hallucination)**:
+      1. **NO Fabrication**: You must base the summary **ONLY** on the provided text. Do NOT invent details, dates, or decisions that are not explicitly stated.
+      2. **Handle Missing Info**: If a discussion ends without a clear decision, state "本案尚未有明確決議" (No clear decision reached yet). Do NOT guess the outcome.
+      3. **No External Knowledge**: Do not add information from outside this transcript (e.g., don't assume standard church schedules unless mentioned).
+
+      **Structure Logic**:
+      Organize the content by "Agenda Item" chronologically. Each major item (Roman Numeral) must include:
+
+      I. [議案名稱/主題]
+         A. **議案背景與內容 (Proposal)**: Briefly describe what was brought up.
+         B. **交通之不同看法或意見 (Fellowship & Discussion)**: 
+            - Summarize the dialogue and different perspectives.
+            - **MUST** reflect the actual flow of fellowship (e.g., if there were concerns, list them).
+            - Use format: "[Speaker X]: Key view".
+         C. **決議與共識 (Decision & Consensus)**: 
+            - Clearly state the final conclusion. 
+            - If no conclusion, state "需後續再交通" (Need further fellowship).
+         D. **具體服事安排與負擔 (Action Items & Burden)**: 
+            - 具體動作 (What)
+            - 服事者 (Who) - *Only if mentioned*
+            - 時間表 (When) - *Only if mentioned*
+            - 靈中負擔 (Spiritual Burden)
 
       **Formatting Rules**:
-      1. Use LSM standard hierarchical numbering: I., A., 1., a.
-      2. Return ONLY HTML string with:
+      1. **Chronological Order**: Process from start to finish.
+      2. Use LSM standard hierarchical numbering: I., A., 1., a.
+      3. Return ONLY HTML string with:
          - Level 1: <b>Bold</b>, margin-left: 0px.
-         - Level 2: margin-left: 20px.
-         - Level 3: margin-left: 40px.
-      3. **Language**: Traditional Chinese (繁體中文).
-      4. **Terminology**: Strictly use LSM standard terms (e.g., 交通, 經綸, 相調).
+         - Level 2: margin-left: 20px; color: #1e40af; (Dark blue)
+         - Level 3: margin-left: 40px;
+      4. **Language**: Traditional Chinese (繁體中文).
+      5. **Terminology**: Strictly use LSM standard terms (e.g., 交通, 經綸, 相調).
 
       Transcript to process:
       ${text}
     `;
 
-    return callGeminiProxy('format', { prompt });
+    try {
+        return await callGeminiProxy('format', { prompt });
+    } catch (e) {
+        console.error("Summarization Error:", e);
+        throw e;
+    }
 };
