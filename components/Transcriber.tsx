@@ -11,7 +11,7 @@ export const Transcriber: React.FC = () => {
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [isBatchProcessing, setIsBatchProcessing] = useState(false);
   const [viewMode, setViewMode] = useState<'edit' | 'format' | 'split'>('edit');
-  const [userInstructions, setUserInstructions] = useState(''); // [新增] 儲存使用者的修正指令
+  const [userInstructions, setUserInstructions] = useState(''); // 儲存使用者的修正指令
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -75,17 +75,14 @@ export const Transcriber: React.FC = () => {
 
   const processJob = async (jobId: string) => {
     const job = jobs.find(j => j.id === jobId);
-    // 只要不是處理中，就允許進入（包含 IDLE 或 ERROR 狀態，方便出錯後重跑）
     if (!job || job.state.status === TranscribeStatus.PROCESSING) return;
 
-    // 建立唯一的快取 Key (檔名 + 大小)
     const cacheKey = `checkpoint_${job.file.name}_${job.file.size}`;
     const savedData = localStorage.getItem(cacheKey);
     
     let startFromIndex = 0;
     let accumulatedText = "";
 
-    // 1. 偵測並詢問是否恢復進度
     if (savedData) {
         try {
             const { completedChunks, text } = JSON.parse(savedData);
@@ -93,7 +90,6 @@ export const Transcriber: React.FC = () => {
                 startFromIndex = completedChunks;
                 accumulatedText = text;
             } else {
-                // 如果使用者選擇不恢復，就清除該舊暫存
                 localStorage.removeItem(cacheKey);
             }
         } catch (e) {
@@ -107,7 +103,7 @@ export const Transcriber: React.FC = () => {
         
         updateJob(jobId, (prev) => ({ 
             metadata: prev.metadata ? { ...prev.metadata, duration: audioBuffer.duration } : null,
-            finalTranscript: accumulatedText // 初始化顯示已恢復的文字
+            finalTranscript: accumulatedText
         }));
 
         updateJobState(jobId, { status: TranscribeStatus.PROCESSING, currentOperation: '分析段落中...' });
@@ -122,15 +118,12 @@ export const Transcriber: React.FC = () => {
         });
 
         const results: ChunkResult[] = [];
-        // 如果是恢復進度，可以考慮把前面的 results 補齊（這部分主要影響 UI 顯示）
         for (let k = 0; k < startFromIndex; k++) {
             results.push({ id: k, startTime: 0, endTime: 0, text: "[已恢復]", status: 'completed' });
         }
 
-        // 2. 迴圈從 startFromIndex 開始
         for (let i = startFromIndex; i < total; i++) {
             const { blob, start, end } = chunksData[i];
-            
             updateJobState(jobId, { 
                 currentOperation: `聽抄片段 ${i + 1}/${total}...`,
                 progress: Math.round((i / total) * 90)
@@ -139,11 +132,9 @@ export const Transcriber: React.FC = () => {
             try {
                 const context = accumulatedText.slice(-200);
                 const text = await transcribeAudioChunk(blob, context);
-                
                 const timeLabel = `[${formatTime(start)}] `;
                 accumulatedText += (accumulatedText ? "\n\n" : "") + timeLabel + text;
                 
-                // 儲存進度到 localStorage
                 localStorage.setItem(cacheKey, JSON.stringify({
                     completedChunks: i + 1,
                     text: accumulatedText
@@ -157,8 +148,6 @@ export const Transcriber: React.FC = () => {
                     finalTranscript: accumulatedText 
                 });
             } catch (err: any) {
-                console.error(`Error chunk ${i}:`, err);
-                // 遇到 429 錯誤時停止，保留目前進度
                 if (err.message?.includes('429')) {
                     throw new Error("API 配額已滿，進度已儲存，請晚點再試。");
                 }
@@ -169,7 +158,6 @@ export const Transcriber: React.FC = () => {
             updateJobState(jobId, { completedChunks: i + 1 });
         }
 
-        // 3. 全部完成後清除暫存
         localStorage.removeItem(cacheKey);
 
         updateJobState(jobId, { 
@@ -177,9 +165,6 @@ export const Transcriber: React.FC = () => {
             progress: 100, 
             currentOperation: '聽抄初稿完成，等待您的修正指示...' 
         });
-
-        // 注意：這裡移除了原本直接呼叫 refineAndMergeTranscript 的程式碼
-        // 也不要在這裡設定 status: COMPLETED
 
     } catch (error: any) {
         console.error("Critical Error:", error);
@@ -190,38 +175,32 @@ export const Transcriber: React.FC = () => {
     }
   };
 
-  // [新增] 處理「開始 AI 潤稿」的函式
   const handleFinalRefine = async (jobId: string) => {
     const job = jobs.find(j => j.id === jobId);
     if (!job || !job.finalTranscript) return;
 
-    // 更新狀態為處理中
     updateJobState(jobId, { 
         status: TranscribeStatus.PROCESSING, 
         currentOperation: '正在根據您的指示優化全篇文稿...' 
     });
     
     try {
-        // 呼叫 Gemini 進行潤稿，並帶入使用者的指令
         const refinedText = await refineAndMergeTranscript(job.finalTranscript, userInstructions);
-        
         updateJob(jobId, { finalTranscript: refinedText });
         updateJobState(jobId, { 
             status: TranscribeStatus.COMPLETED, 
             currentOperation: '完成' 
         });
-        // 清空指令框，方便下一檔案使用
         setUserInstructions(''); 
     } catch (error: any) {
         updateJobState(jobId, { 
-            status: TranscribeStatus.AWAITING_REFINEMENT, // 失敗的話回到等待狀態
+            status: TranscribeStatus.AWAITING_REFINEMENT,
             error: "潤稿失敗，請重試" 
         });
         alert(`優化失敗: ${error.message}`);
     }
   };
 
-  // [新增] 處理「直接完成 (不潤稿)」的函式
   const handleSkipRefine = (jobId: string) => {
       updateJobState(jobId, { 
           status: TranscribeStatus.COMPLETED, 
@@ -229,7 +208,7 @@ export const Transcriber: React.FC = () => {
       });
       setUserInstructions('');
   };
-
+  
   const handleBatchProcess = async () => {
     setIsBatchProcessing(true);
     const queue = jobs.filter(j => j.state.status === TranscribeStatus.IDLE);
@@ -239,14 +218,11 @@ export const Transcriber: React.FC = () => {
     setIsBatchProcessing(false);
   };
 
-  // --- Action Handlers ---
   const handleMeetingSummary = async () => {
     if (!activeJobId) return;
     const job = jobs.find(j => j.id === activeJobId);
     if (!job) return;
 
-    // [優化 1]：檢查暫存
-    // 如果之前已經生成過總結 (summaryHtml)，直接把它拿來顯示 (formattedHtml)
     if (job.summaryHtml) { 
         updateJob(activeJobId, { formattedHtml: job.summaryHtml });
         setViewMode('format'); 
@@ -259,20 +235,17 @@ export const Transcriber: React.FC = () => {
     updateJob(activeJobId, { isFormatting: true });
     try {
         const html = await summarizeMeeting(sourceText); 
-        
-        // [優化 2]：API 回來後，同時存入「備份欄位」與「顯示欄位」
         updateJob(activeJobId, { 
-            summaryHtml: html,      // 存入專屬欄位 (下次就不會重跑)
-            formattedHtml: html     // 存入顯示欄位 (讓畫面立刻更新)
+            summaryHtml: html,
+            formattedHtml: html
         });
         setViewMode('format');
     } catch (error: any) {
-        console.error(error);
         alert(`生成總結失敗: ${error.message}`);
     } finally {
         updateJob(activeJobId, { isFormatting: false });
     }
-};
+  };
 
   const handleTranslate = async () => {
     if (!activeJobId) return;
@@ -290,7 +263,6 @@ export const Transcriber: React.FC = () => {
     const job = jobs.find(j => j.id === activeJobId);
     if (!job) return;
 
-    // [新增] 檢查暫存：如果已經有排版結果，直接切換模式並結束
     if (job.formattedHtml) {
         setViewMode('format');
         return;
@@ -316,7 +288,6 @@ export const Transcriber: React.FC = () => {
     const job = jobs.find(j => j.id === activeJobId);
     if (!job) return;
 
-    // [新增] 檢查暫存：如果已經有連結結果，直接切換模式並結束
     if (job.enrichedHtml) {
         setViewMode('split');
         return;
@@ -335,7 +306,7 @@ export const Transcriber: React.FC = () => {
     } finally {
         updateJob(activeJobId, { isEnriching: false });
     }
-};
+  };
 
   const handleExport = (format: 'txt' | 'doc' | 'pdf') => {
     if (!activeJobId) return;
@@ -353,7 +324,7 @@ export const Transcriber: React.FC = () => {
             <html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
             <head><meta charset='utf-8'><title>Export</title>
             <style>body { font-family: 'PMingLiU', 'Times New Roman', serif; font-size: 14pt; line-height: 1.5; }</style>
-            </head><body>${viewMode === 'format' || viewMode === 'split' ? (viewMode === 'split' ? job.enrichedHtml : job.formattedHtml) : job.finalTranscript.replace(/\n/g, '<br/>')}</body></html>
+            </head><body>${viewMode === 'format' || viewMode === 'split' ? (viewMode === 'split' ? job.enrichedHtml : job.formattedHtml) : (job.translatedTranscript || job.finalTranscript).replace(/\n/g, '<br/>')}</body></html>
         `;
         const blob = new Blob([docContent], { type: "application/msword" });
         triggerDownload(blob, `${fileName}.doc`);
@@ -364,7 +335,7 @@ export const Transcriber: React.FC = () => {
                 <html><head><title>${fileName}</title>
                 <style>body { font-family: 'PMingLiU', 'Times New Roman', serif; padding: 40px; font-size: 12pt; line-height: 1.5; }
                 @media print { body { -webkit-print-color-adjust: exact; } }
-                </style></head><body>${viewMode === 'format' || viewMode === 'split' ? (viewMode === 'split' ? job.enrichedHtml : job.formattedHtml) : job.finalTranscript.replace(/\n/g, '<br/>')}</body></html>
+                </style></head><body>${viewMode === 'format' || viewMode === 'split' ? (viewMode === 'split' ? job.enrichedHtml : job.formattedHtml) : (job.translatedTranscript || job.finalTranscript).replace(/\n/g, '<br/>')}</body></html>
             `);
             printWindow.document.close();
             printWindow.focus();
@@ -391,12 +362,10 @@ export const Transcriber: React.FC = () => {
   const activeJob = jobs.find(j => j.id === activeJobId);
 
   return (
-    // 修改點 1: 主容器改為 flex-col (手機) lg:flex-row (電腦)，適應不同螢幕方向
     <div className="max-w-[1920px] mx-auto px-4 lg:px-6 h-[calc(100vh-140px)] flex flex-col lg:flex-row gap-6">
       
-      {/* 修改點 2: 側邊欄寬度在手機上滿版 (w-full)，高度改為 1/3 (h-1/3) 或固定高度，電腦版恢復原狀 */}
+      {/* Sidebar */}
       <div className="w-full lg:w-96 h-1/3 lg:h-full flex-shrink-0 flex flex-col bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
-        {/* Sidebar Header */}
         <div className="p-4 border-b border-gray-100 bg-gray-50 flex items-center justify-between">
            <h2 className="font-semibold text-gray-700 flex items-center gap-2">
              <Layers className="w-5 h-5 text-blue-600" /> 檔案列表 ({jobs.length})
@@ -404,21 +373,12 @@ export const Transcriber: React.FC = () => {
            <button 
              onClick={() => fileInputRef.current?.click()}
              className="p-1.5 bg-blue-100 text-blue-600 rounded-lg hover:bg-blue-200 transition-colors"
-             title="新增檔案"
            >
              <Plus className="w-4 h-4" />
            </button>
-           <input 
-                type="file" 
-                ref={fileInputRef} 
-                onChange={handleFileChange} 
-                accept="audio/*,video/*" 
-                multiple 
-                className="hidden" 
-            />
+           <input type="file" ref={fileInputRef} onChange={handleFileChange} accept="audio/*,video/*" multiple className="hidden" />
         </div>
 
-        {/* File List */}
         <div className="flex-1 overflow-y-auto p-3 space-y-2">
             {jobs.length === 0 && (
                 <div className="h-full flex flex-col items-center justify-center text-gray-400 p-4 text-center">
@@ -431,9 +391,7 @@ export const Transcriber: React.FC = () => {
                   key={job.id} 
                   onClick={() => setActiveJobId(job.id)}
                   className={`relative group p-3 rounded-xl border transition-all cursor-pointer ${
-                      activeJobId === job.id 
-                      ? 'bg-blue-50 border-blue-200 ring-1 ring-blue-100' 
-                      : 'bg-white border-gray-100 hover:border-blue-200'
+                      activeJobId === job.id ? 'bg-blue-50 border-blue-200 ring-1 ring-blue-100' : 'bg-white border-gray-100 hover:border-blue-200'
                   }`}
                 >
                     <div className="flex justify-between items-start mb-1">
@@ -448,36 +406,21 @@ export const Transcriber: React.FC = () => {
                             <Trash2 className="w-3 h-3" />
                         </button>
                     </div>
-                    
                     <div className="flex justify-between items-center text-xs text-gray-400 mt-2">
                        <span>{job.metadata?.duration ? formatTime(job.metadata.duration) : '--:--'}</span>
-                       <span className={`px-1.5 rounded ${
-                           job.state.status === 'COMPLETED' ? 'bg-green-100 text-green-700' :
-                           job.state.status === 'PROCESSING' || job.state.status === 'DECODING' ? 'bg-blue-100 text-blue-700' :
-                           'bg-gray-100'
-                       }`}>
-                           {job.state.status === 'IDLE' ? '等待中' : 
-                            job.state.status === 'COMPLETED' ? '完成' :
-                            job.state.status === 'ERROR' ? '錯誤' : 
-                            `${job.state.progress}%`}
+                       <span className={`px-1.5 rounded ${job.state.status === 'COMPLETED' ? 'bg-green-100 text-green-700' : job.state.status === 'PROCESSING' || job.state.status === 'DECODING' ? 'bg-blue-100 text-blue-700' : 'bg-gray-100'}`}>
+                           {job.state.status === 'IDLE' ? '等待中' : job.state.status === 'COMPLETED' ? '完成' : job.state.status === 'ERROR' ? '錯誤' : job.state.status === TranscribeStatus.AWAITING_REFINEMENT ? '等待潤稿' : `${job.state.progress}%`}
                        </span>
                     </div>
-
-                    {(job.state.status === TranscribeStatus.PROCESSING || job.state.status === TranscribeStatus.DECODING) && (
-                        <div className="w-full bg-gray-100 rounded-full h-1 mt-2 overflow-hidden">
-                            <div className="bg-blue-500 h-1 rounded-full transition-all duration-300" style={{ width: `${job.state.progress}%` }}></div>
-                        </div>
-                    )}
                 </div>
             ))}
         </div>
 
-        {/* Sidebar Footer */}
         <div className="p-4 border-t border-gray-200 bg-gray-50">
             <button 
                 onClick={handleBatchProcess}
                 disabled={isBatchProcessing || jobs.every(j => j.state.status === 'COMPLETED')}
-                className="w-full py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm transition-all hover:shadow"
+                className="w-full py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium flex items-center justify-center gap-2 shadow-sm transition-all"
             >
                 {isBatchProcessing ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
                 {isBatchProcessing ? '批次處理中...' : '開始批次處理'}
@@ -496,39 +439,19 @@ export const Transcriber: React.FC = () => {
              <>
                  {/* Toolbar */}
                   <div className="p-3 border-b border-gray-100 bg-gray-50 flex flex-wrap justify-between items-center gap-3">
-                      {/* 修改 1: 加入 lg:overflow-visible 解除電腦版的遮罩，讓 Tooltip 能顯示 */}
                       <div className="flex flex-1 items-center space-x-2 overflow-x-auto lg:overflow-visible no-scrollbar">
-                          
-                          {/* 編輯模式 Tooltip */}
                           <div className="relative group flex items-center">
                               <button onClick={() => setViewMode('edit')} className={`px-3 py-2 text-sm font-medium rounded-lg flex items-center gap-2 flex-shrink-0 ${viewMode === 'edit' ? 'bg-white text-blue-600 shadow-sm ring-1 ring-gray-200' : 'text-gray-600 hover:bg-gray-100'}`}>
                                   <Type className="w-4 h-4" /> 編輯模式
                               </button>
-                              {/* 修改 2: 改為 top-full (往下), mt-2, 箭頭改為 bottom-full (向上指) */}
-                              <div className="absolute top-full mt-2 left-0 hidden group-hover:block w-48 bg-gray-800 text-white text-[10px] rounded py-1.5 px-3 shadow-xl z-50 pointer-events-none text-left leading-relaxed">
+                              <div className="absolute top-full mt-2 left-0 hidden group-hover:block w-48 bg-gray-800 text-white text-[10px] rounded py-1.5 px-3 shadow-xl z-50 pointer-events-none text-left">
                                   自由修改聽抄文字內容，修改後會同步更新至其他模式
                                   <div className="absolute bottom-full left-4 border-4 border-transparent border-b-gray-800"></div>
                               </div>
                           </div>
 
-                          {/* LSM 排版 Tooltip */}
-                          {/* <div className="relative group flex items-center">
-                              <button onClick={handleFormatLSM} disabled={activeJob.isFormatting} className={`px-3 py-2 text-sm font-medium rounded-lg flex items-center gap-2 flex-shrink-0 ${viewMode === 'format' ? 'bg-white text-blue-600 shadow-sm ring-1 ring-gray-200' : 'text-gray-600 hover:bg-gray-100'}`}>
-                                  {activeJob.isFormatting ? <RefreshCw className="w-4 h-4 animate-spin"/> : <Layout className="w-4 h-4" />} LSM 排版
-                              </button>
-                              <div className="absolute top-full mt-2 left-0 hidden group-hover:block w-48 bg-gray-800 text-white text-[10px] rounded py-1.5 px-3 shadow-xl z-50 pointer-events-none text-left leading-relaxed">
-                                  自動偵測邏輯段落，套用標準羅馬數字與英文字母大綱樣式
-                                  <div className="absolute bottom-full left-4 border-4 border-transparent border-b-gray-800"></div>
-                              </div>
-                          </div> */}
-
-                          {/* 會議總結 Tooltip */}
                           <div className="relative group flex items-center">
-                              <button 
-                                  onClick={handleMeetingSummary} 
-                                  disabled={activeJob.isFormatting} 
-                                  className={`px-3 py-2 text-sm font-medium rounded-lg flex items-center gap-2 flex-shrink-0 ${viewMode === 'format' ? 'text-blue-600' : 'text-gray-600 hover:bg-gray-100'}`}
-                              >
+                              <button onClick={handleMeetingSummary} disabled={activeJob.isFormatting} className={`px-3 py-2 text-sm font-medium rounded-lg flex items-center gap-2 flex-shrink-0 ${viewMode === 'format' ? 'text-blue-600' : 'text-gray-600 hover:bg-gray-100'}`}>
                                   {activeJob.isFormatting ? <RefreshCw className="w-4 h-4 animate-spin"/> : <Sparkles className="w-4 h-4" />} 會議總結
                               </button>
                               <div className="absolute top-full mt-2 left-0 hidden group-hover:block w-48 bg-gray-800 text-white text-[10px] rounded py-1.5 px-3 shadow-xl z-50 pointer-events-none text-left leading-relaxed">
@@ -537,12 +460,11 @@ export const Transcriber: React.FC = () => {
                               </div>
                           </div>
 
-                          {/* 經文對照 Tooltip */}
                           <div className="relative group flex items-center">
                               <button onClick={handleEnrichLinks} disabled={activeJob.isEnriching} className={`px-3 py-2 text-sm font-medium rounded-lg flex items-center gap-2 flex-shrink-0 ${viewMode === 'split' ? 'bg-white text-blue-600 shadow-sm ring-1 ring-gray-200' : 'text-gray-600 hover:bg-gray-100'}`}>
                                   {activeJob.isEnriching ? <RefreshCw className="w-4 h-4 animate-spin"/> : <BookOpen className="w-4 h-4" />} 經文對照
                               </button>
-                              <div className="absolute top-full mt-2 left-0 hidden group-hover:block w-48 bg-gray-800 text-white text-[10px] rounded py-1.5 px-3 shadow-xl z-50 pointer-events-none text-left leading-relaxed">
+                              <div className="absolute top-full mt-2 left-0 hidden group-hover:block w-48 bg-gray-800 text-white text-[10px] rounded py-1.5 px-3 shadow-xl z-50 pointer-events-none text-left">
                                   生成恢復本聖經、生命讀經與職事書報的自動連結與對照
                                   <div className="absolute bottom-full left-4 border-4 border-transparent border-b-gray-800"></div>
                               </div>
@@ -550,48 +472,21 @@ export const Transcriber: React.FC = () => {
 
                           <div className="w-px h-6 bg-gray-300 mx-2 self-center flex-shrink-0"></div>
 
-                          {/* 翻譯 Tooltip */}
                           <div className="relative group flex items-center">
                               <button onClick={handleTranslate} disabled={activeJob.isTranslating || !!activeJob.translatedTranscript} className={`px-3 py-2 text-sm font-medium rounded-lg flex items-center gap-2 flex-shrink-0 ${activeJob.translatedTranscript ? 'text-green-600 bg-green-50' : 'text-gray-600 hover:bg-gray-100'}`}>
                                   {activeJob.isTranslating ? <RefreshCw className="w-4 h-4 animate-spin"/> : <Languages className="w-4 h-4" />} {activeJob.translatedTranscript ? '已翻譯' : '翻譯'}
                               </button>
-                              <div className="absolute top-full mt-2 left-0 hidden group-hover:block w-48 bg-gray-800 text-white text-[10px] rounded py-1.5 px-3 shadow-xl z-50 pointer-events-none text-left leading-relaxed">
+                              <div className="absolute top-full mt-2 left-0 hidden group-hover:block w-48 bg-gray-800 text-white text-[10px] rounded py-1.5 px-3 shadow-xl z-50 pointer-events-none text-left">
                                   使用專為恢復本與職事術語優化的 AI 模型進行中英互譯
                                   <div className="absolute bottom-full left-4 border-4 border-transparent border-b-gray-800"></div>
                               </div>
                           </div>
-
-                          <div className="ml-4 flex items-center gap-2 flex-shrink-0">
-                              {/* ... 狀態顯示區塊 (保留原樣) ... */}
-                              {activeJob.state.status === TranscribeStatus.PROCESSING && activeJob.state.completedChunks < activeJob.state.totalChunks && (
-                                  <span className="flex items-center gap-1.5 bg-amber-50 text-amber-700 px-3 py-1 rounded-full text-xs font-bold border border-amber-200 animate-pulse">
-                                      <RefreshCw className="w-3 h-3 animate-spin" />
-                                      辨識中 ({activeJob.state.completedChunks}/{activeJob.state.totalChunks})
-                                  </span>
-                              )}
-                              
-                              {activeJob.state.status === TranscribeStatus.PROCESSING && activeJob.state.completedChunks === activeJob.state.totalChunks && (
-                                  <span className="flex items-center gap-1.5 bg-blue-50 text-blue-700 px-3 py-1 rounded-full text-xs font-bold border border-blue-200 animate-pulse">
-                                      <Sparkles className="w-3 h-3" />
-                                      校對中...
-                                  </span>
-                              )}
-
-                              {activeJob.state.status === TranscribeStatus.COMPLETED && (
-                                  <span className="flex items-center gap-1.5 bg-green-50 text-green-700 px-3 py-1 rounded-full text-xs font-bold border border-green-200">
-                                      <CheckCircle2 className="w-3 h-3" />
-                                      完成
-                                  </span>
-                              )}
-                          </div>
                       </div>
 
-                      {/* 匯出按鈕 (移除 Tooltip，保留下拉選單) */}
                       <div className="relative group flex-shrink-0">
                         <button className="px-4 py-2 text-sm font-medium bg-blue-600 text-white rounded hover:bg-blue-700 flex items-center gap-2 shadow-sm">
                             <Download className="w-4 h-4" /> 匯出
                         </button>
-                        {/* 下拉選單保留 */}
                         <div className="absolute right-0 top-full pt-2 w-48 hidden group-hover:block z-50">
                             <div className="bg-white rounded-md shadow-lg py-1 border border-gray-100">
                                 <button onClick={() => handleExport('txt')} className="block w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">文字檔 (.txt)</button>
@@ -603,44 +498,95 @@ export const Transcriber: React.FC = () => {
                   </div>
 
                  {/* Content Area */}
-                 <div className="flex-1 relative overflow-hidden flex bg-gray-50/50">
-                    {activeJob && activeJob.state.status === TranscribeStatus.AWAITING_REFINEMENT && (
-                        <div className="flex-shrink-0 p-4 bg-blue-50 border-b border-blue-100 shadow-sm animate-in slide-in-from-top-4 z-10">
-                            <div className="max-w-4xl mx-auto">
-                                <div className="flex items-center gap-2 mb-2 text-blue-800 font-bold">
-                                    <Sparkles className="w-5 h-5" />
-                                    <h4>聽抄初稿已完成！AI 需要您的協助來提升準確度：</h4>
-                                </div>
-                                <p className="text-sm text-blue-600 mb-3">
-                                    請在下方告訴 AI 剛才錄音中出現的<b>正確人名</b>、<b>特定地點</b>或<b>專有術語</b>。
-                                </p>
-                                
-                                <div className="flex gap-3">
-                                    <textarea 
-                                        value={userInstructions}
-                                        onChange={(e) => setUserInstructions(e.target.value)}
-                                        placeholder="例如：將所有的『零弟兄』修正為『林弟兄』；剛才提到的是『新東會所』不是『心動會所』..."
-                                        className="flex-1 p-3 text-sm border border-blue-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none resize-none h-24 shadow-inner"
-                                    />
-                                    <div className="flex flex-col gap-2 justify-center">
-                                        <button 
-                                            onClick={() => handleFinalRefine(activeJob.id)}
-                                            className="px-6 py-3 bg-blue-600 text-white rounded-lg font-bold hover:bg-blue-700 shadow-md transition-all flex items-center justify-center gap-2 whitespace-nowrap"
-                                        >
-                                            <Sparkles className="w-4 h-4" /> 開始 AI 優化
-                                        </button>
-                                        <button 
-                                            onClick={() => handleSkipRefine(activeJob.id)}
-                                            className="px-6 py-2 bg-white text-gray-500 border border-gray-300 rounded-lg text-sm hover:bg-gray-100 transition-all whitespace-nowrap"
-                                        >
-                                            跳過，直接完成
-                                        </button>
-                                    </div>
-                                </div>
+                 <div className="flex-1 relative overflow-hidden flex flex-col bg-gray-50/50">
+                    
+                    {/* [新增] 頂部進度條：當有文字顯示且仍在處理中時，顯示詳細進度 */}
+                    {activeJob && activeJob.state.status === TranscribeStatus.PROCESSING && activeJob.finalTranscript && (
+                        <div className="px-6 py-2 bg-white border-b border-gray-200 flex flex-col gap-1 flex-shrink-0 z-20">
+                            <div className="flex justify-between text-xs font-medium text-gray-500">
+                                <span className="flex items-center gap-2">
+                                    <RefreshCw className="w-3 h-3 animate-spin text-blue-500" />
+                                    {activeJob.state.currentOperation}
+                                </span>
+                                <span className="text-blue-600">{activeJob.state.progress}%</span>
+                            </div>
+                            <div className="w-full bg-gray-100 rounded-full h-1.5 overflow-hidden">
+                                <div 
+                                    className="bg-blue-600 h-1.5 rounded-full transition-all duration-500 ease-out shadow-[0_0_10px_rgba(37,99,235,0.3)]" 
+                                    style={{ width: `${activeJob.state.progress}%` }}
+                                ></div>
                             </div>
                         </div>
                     )}
-                    {!activeJob.finalTranscript && activeJob.state.status !== 'COMPLETED' ? (
+                    {/* [修改] 持久化提示框：辨識中、等待潤稿、甚至「完成後」都顯示，支援多次修改 */}
+                    {activeJob && (
+                        activeJob.state.status === TranscribeStatus.PROCESSING || 
+                        activeJob.state.status === TranscribeStatus.AWAITING_REFINEMENT || 
+                        activeJob.state.status === TranscribeStatus.COMPLETED // [新增] 完成後依然顯示
+                    ) && (
+                        <div className={`flex-shrink-0 p-4 border-b shadow-sm animate-in slide-in-from-top-4 z-10 ${
+                            activeJob.state.status === TranscribeStatus.COMPLETED ? 'bg-green-50 border-green-100' : 'bg-blue-50 border-blue-100'
+                        }`}>
+                            <div className="max-w-4xl mx-auto flex gap-4 items-start">
+                                <div className="flex-1">
+                                    <div className={`flex items-center gap-2 mb-2 font-bold text-sm ${
+                                        activeJob.state.status === TranscribeStatus.COMPLETED ? 'text-green-800' : 'text-blue-800'
+                                    }`}>
+                                        <Sparkles className="w-4 h-4" />
+                                        <span>
+                                            {activeJob.state.status === TranscribeStatus.COMPLETED 
+                                                ? "AI 隨時待命：您可以繼續下指令，請 AI 再次潤飾或是修正特定錯誤" 
+                                                : "AI 修正提示與指引"}
+                                        </span>
+                                    </div>
+                                    <textarea 
+                                        value={userInstructions}
+                                        onChange={(e) => setUserInstructions(e.target.value)}
+                                        placeholder={activeJob.state.status === TranscribeStatus.COMPLETED 
+                                            ? "例如：『請把語氣改得更正式一點』、『第三段的經節引用有誤請修正』..." 
+                                            : "邊看邊寫：例如『把零弟兄改為林弟兄』..."}
+                                        className={`w-full p-2 text-sm border rounded-lg h-20 focus:ring-2 outline-none resize-none shadow-inner bg-white/60 ${
+                                            activeJob.state.status === TranscribeStatus.COMPLETED 
+                                            ? 'border-green-200 focus:ring-green-400 placeholder-green-700/50' 
+                                            : 'border-blue-200 focus:ring-blue-400'
+                                        }`}
+                                    />
+                                </div>
+                                
+                                {/* 按鈕邏輯：在「等待潤稿」或是「已完成」時都可以按 */}
+                                {(activeJob.state.status === TranscribeStatus.AWAITING_REFINEMENT || activeJob.state.status === TranscribeStatus.COMPLETED) && (
+                                    <div className="flex flex-col gap-2 pt-6">
+                                        <button 
+                                            onClick={() => handleFinalRefine(activeJob.id)}
+                                            disabled={!userInstructions && activeJob.state.status === TranscribeStatus.COMPLETED} // 完成狀態下，沒寫字不給按，避免誤觸
+                                            className={`px-6 py-2 text-white rounded-lg text-sm font-bold shadow-md transition-all flex items-center justify-center gap-2 whitespace-nowrap ${
+                                                !userInstructions && activeJob.state.status === TranscribeStatus.COMPLETED
+                                                ? 'bg-gray-400 cursor-not-allowed'
+                                                : activeJob.state.status === TranscribeStatus.COMPLETED 
+                                                    ? 'bg-green-600 hover:bg-green-700' 
+                                                    : 'bg-blue-600 hover:bg-blue-700'
+                                            }`}
+                                        >
+                                            <Sparkles className="w-4 h-4" /> 
+                                            {activeJob.state.status === TranscribeStatus.COMPLETED ? "再次優化 (Re-refine)" : "確認並執行潤稿"}
+                                        </button>
+                                        
+                                        {/* 只有在等待階段才顯示跳過按鈕，完成後就不需要跳過了 */}
+                                        {activeJob.state.status === TranscribeStatus.AWAITING_REFINEMENT && (
+                                            <button 
+                                                onClick={() => handleSkipRefine(activeJob.id)}
+                                                className="text-xs text-blue-400 hover:text-blue-600 underline text-center"
+                                            >
+                                                跳過潤稿，直接完成
+                                            </button>
+                                        )}
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    )}
+
+                    {!activeJob.finalTranscript && activeJob.state.status !== TranscribeStatus.COMPLETED && activeJob.state.status !== TranscribeStatus.AWAITING_REFINEMENT ? (
                         <div className="flex-1 flex flex-col items-center justify-center p-10 text-center">
                             {activeJob.state.status === 'IDLE' ? (
                                 <>
@@ -663,11 +609,6 @@ export const Transcriber: React.FC = () => {
                                     <div className="w-full bg-gray-200 rounded-full h-3 overflow-hidden">
                                         <div className="bg-blue-600 h-3 rounded-full transition-all duration-500" style={{ width: `${activeJob.state.progress}%` }}></div>
                                     </div>
-                                    <div className="mt-8 grid grid-cols-4 gap-2 opacity-50">
-                                        {Array.from({ length: Math.min(activeJob.state.totalChunks || 4, 12) }).map((_, idx) => (
-                                            <div key={idx} className={`h-1.5 rounded ${idx < activeJob.state.completedChunks ? 'bg-blue-600' : 'bg-gray-300'}`} />
-                                        ))}
-                                    </div>
                                 </div>
                             )}
                         </div>
@@ -678,19 +619,17 @@ export const Transcriber: React.FC = () => {
                                   className="flex-1 w-full p-8 focus:outline-none resize-none font-serif text-lg leading-relaxed text-gray-800 bg-white"
                                   style={{ fontFamily: '"PMingLiU", "Times New Roman", serif' }}
                                   value={activeJob.translatedTranscript || activeJob.finalTranscript}
-                                                    readOnly={
+                                  // [修正重點 2] 解除鎖定：只在解碼或處理中唯讀，等待潤稿時(AWAITING_REFINEMENT)開放編輯
+                                  readOnly={
                                       activeJob.state.status === TranscribeStatus.PROCESSING || 
-                                      activeJob.state.status === TranscribeStatus.DECODING ||
-                                      activeJob.state.status === TranscribeStatus.AWAITING_REFINEMENT // 加入這個狀態
+                                      activeJob.state.status === TranscribeStatus.DECODING
                                   }
                                   placeholder={activeJob.state.status === TranscribeStatus.PROCESSING ? "正在努力聽抄中，請稍候..." : ""}
                                   onChange={(e) => {
-                                      // 只有在完成狀態才允許編輯
-                                      if (activeJob.state.status === TranscribeStatus.COMPLETED) {
+                                      // 允許在 完成(COMPLETED) 或 等待潤稿(AWAITING_REFINEMENT) 狀態下修改
+                                      if (activeJob.state.status === TranscribeStatus.COMPLETED || activeJob.state.status === TranscribeStatus.AWAITING_REFINEMENT) {
                                           const newValue = e.target.value;
                                           
-                                          // [修改重點]：更新文字時，同時清空 formattedHtml 與 enrichedHtml
-                                          // 這樣下次點擊「LSM 排版」或「經文對照」時，程式就會因為內容為空而重新呼叫 AI
                                           if (activeJob.translatedTranscript) {
                                               updateJob(activeJob.id, { 
                                                   translatedTranscript: newValue,
@@ -714,7 +653,6 @@ export const Transcriber: React.FC = () => {
                                 </div>
                             )}
                             {viewMode === 'split' && (
-                                // 修改點 3: 經文對照模式在手機改為上下排列 (flex-col)，電腦改為左右 (lg:flex-row)
                                 <div className="flex flex-col lg:flex-row flex-1 w-full h-full">
                                     <div className="w-full lg:w-1/2 h-1/2 lg:h-full border-b lg:border-b-0 lg:border-r border-gray-200 overflow-y-auto p-6 bg-gray-50">
                                         <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-4">原始文稿</h4>
