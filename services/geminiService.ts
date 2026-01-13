@@ -85,13 +85,22 @@ export const transcribeAudioChunk = async (
 };
 
 // 2. 潤稿與合併
-export const refineAndMergeTranscript = async (fullText: string): Promise<string> => {
+export const refineAndMergeTranscript = async (
+    fullText: string, 
+    userInstructions?: string  // [修改] 新增參數接收使用者的指令
+): Promise<string> => {
     const prompt = `
       You are a senior editor for the Living Stream Ministry (LSM).
       You are refining a raw transcript merged from audio segments.
 
       **Input Text**:
       ${fullText}
+
+      **User Instructions (HIGHEST PRIORITY)**:
+      ${userInstructions 
+        ? `The user has provided specific corrections. You MUST follow these strictly to fix names, locations, or terminology:\n"${userInstructions}"` 
+        : "No specific user instructions provided."
+      }
 
       **Your Mission**:
       Refine the text into a readable, accurate ministry transcript while preserving the original meaning and speaker flow.
@@ -103,6 +112,7 @@ export const refineAndMergeTranscript = async (fullText: string): Promise<string
       2. **Terminology Correction**:
          - **CRITICAL**: Standardize all terms according to the Recovery Version Bible and LSM publications.
          - Correct common homophone errors in ministry context (e.g., ensure "神" vs "人", "靈" vs "零").
+         - **Apply User Instructions**: If the user specified a name (e.g., "Change 0 Brother to Brother Lin"), execute it here.
       3. **Punctuation & Flow**:
          - Fix broken sentences at connection points.
          - Convert spoken rhythm into proper written punctuation.
@@ -117,6 +127,7 @@ export const refineAndMergeTranscript = async (fullText: string): Promise<string
     `;
 
     try {
+        // 這裡不需要改動 key，因為參數是包在 prompt 字串裡的
         return await callGeminiProxy('refine', { prompt });
     } catch (e) {
         console.warn("Refining failed, returning original", e);

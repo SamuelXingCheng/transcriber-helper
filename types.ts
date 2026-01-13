@@ -1,9 +1,10 @@
 export enum TranscribeStatus {
   IDLE = 'IDLE',
   DECODING = 'DECODING',
-  PROCESSING = 'PROCESSING', // Splitting and Transcribing
+  PROCESSING = 'PROCESSING',
+  AWAITING_REFINEMENT = 'AWAITING_REFINEMENT', // [新增] 等待潤稿狀態
   COMPLETED = 'COMPLETED',
-  ERROR = 'ERROR',
+  ERROR = 'ERROR'
 }
 
 export interface ChunkResult {
@@ -45,7 +46,7 @@ export interface FileJob {
   formattedHtml: string;
   enrichedHtml: string;
   summaryHtml: string;
-  
+  lsmHtml?: string;
   // Flags
   isTranslating: boolean;
   isFormatting: boolean;

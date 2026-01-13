@@ -11,7 +11,8 @@ export const Transcriber: React.FC = () => {
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [isBatchProcessing, setIsBatchProcessing] = useState(false);
   const [viewMode, setViewMode] = useState<'edit' | 'format' | 'split'>('edit');
-  
+  const [userInstructions, setUserInstructions] = useState(''); // [新增] 儲存使用者的修正指令
+
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const updateJob = (id: string, updates: Partial<FileJob> | ((prev: FileJob) => Partial<FileJob>)) => {
@@ -168,14 +169,17 @@ export const Transcriber: React.FC = () => {
             updateJobState(jobId, { completedChunks: i + 1 });
         }
 
-        updateJobState(jobId, { currentOperation: '正在優化全篇文稿...' });
-        const refinedText = await refineAndMergeTranscript(accumulatedText);
-        
-        updateJob(jobId, { finalTranscript: refinedText });
-        updateJobState(jobId, { status: TranscribeStatus.COMPLETED, progress: 100, currentOperation: '完成' });
-
         // 3. 全部完成後清除暫存
         localStorage.removeItem(cacheKey);
+
+        updateJobState(jobId, { 
+            status: TranscribeStatus.AWAITING_REFINEMENT, 
+            progress: 100, 
+            currentOperation: '聽抄初稿完成，等待您的修正指示...' 
+        });
+
+        // 注意：這裡移除了原本直接呼叫 refineAndMergeTranscript 的程式碼
+        // 也不要在這裡設定 status: COMPLETED
 
     } catch (error: any) {
         console.error("Critical Error:", error);
@@ -184,7 +188,47 @@ export const Transcriber: React.FC = () => {
             error: error.message || "處理失敗" 
         });
     }
-};
+  };
+
+  // [新增] 處理「開始 AI 潤稿」的函式
+  const handleFinalRefine = async (jobId: string) => {
+    const job = jobs.find(j => j.id === jobId);
+    if (!job || !job.finalTranscript) return;
+
+    // 更新狀態為處理中
+    updateJobState(jobId, { 
+        status: TranscribeStatus.PROCESSING, 
+        currentOperation: '正在根據您的指示優化全篇文稿...' 
+    });
+    
+    try {
+        // 呼叫 Gemini 進行潤稿，並帶入使用者的指令
+        const refinedText = await refineAndMergeTranscript(job.finalTranscript, userInstructions);
+        
+        updateJob(jobId, { finalTranscript: refinedText });
+        updateJobState(jobId, { 
+            status: TranscribeStatus.COMPLETED, 
+            currentOperation: '完成' 
+        });
+        // 清空指令框，方便下一檔案使用
+        setUserInstructions(''); 
+    } catch (error: any) {
+        updateJobState(jobId, { 
+            status: TranscribeStatus.AWAITING_REFINEMENT, // 失敗的話回到等待狀態
+            error: "潤稿失敗，請重試" 
+        });
+        alert(`優化失敗: ${error.message}`);
+    }
+  };
+
+  // [新增] 處理「直接完成 (不潤稿)」的函式
+  const handleSkipRefine = (jobId: string) => {
+      updateJobState(jobId, { 
+          status: TranscribeStatus.COMPLETED, 
+          currentOperation: '完成 (未潤稿)' 
+      });
+      setUserInstructions('');
+  };
 
   const handleBatchProcess = async () => {
     setIsBatchProcessing(true);
@@ -560,6 +604,42 @@ export const Transcriber: React.FC = () => {
 
                  {/* Content Area */}
                  <div className="flex-1 relative overflow-hidden flex bg-gray-50/50">
+                    {activeJob && activeJob.state.status === TranscribeStatus.AWAITING_REFINEMENT && (
+                        <div className="flex-shrink-0 p-4 bg-blue-50 border-b border-blue-100 shadow-sm animate-in slide-in-from-top-4 z-10">
+                            <div className="max-w-4xl mx-auto">
+                                <div className="flex items-center gap-2 mb-2 text-blue-800 font-bold">
+                                    <Sparkles className="w-5 h-5" />
+                                    <h4>聽抄初稿已完成！AI 需要您的協助來提升準確度：</h4>
+                                </div>
+                                <p className="text-sm text-blue-600 mb-3">
+                                    請在下方告訴 AI 剛才錄音中出現的<b>正確人名</b>、<b>特定地點</b>或<b>專有術語</b>。
+                                </p>
+                                
+                                <div className="flex gap-3">
+                                    <textarea 
+                                        value={userInstructions}
+                                        onChange={(e) => setUserInstructions(e.target.value)}
+                                        placeholder="例如：將所有的『零弟兄』修正為『林弟兄』；剛才提到的是『新東會所』不是『心動會所』..."
+                                        className="flex-1 p-3 text-sm border border-blue-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none resize-none h-24 shadow-inner"
+                                    />
+                                    <div className="flex flex-col gap-2 justify-center">
+                                        <button 
+                                            onClick={() => handleFinalRefine(activeJob.id)}
+                                            className="px-6 py-3 bg-blue-600 text-white rounded-lg font-bold hover:bg-blue-700 shadow-md transition-all flex items-center justify-center gap-2 whitespace-nowrap"
+                                        >
+                                            <Sparkles className="w-4 h-4" /> 開始 AI 優化
+                                        </button>
+                                        <button 
+                                            onClick={() => handleSkipRefine(activeJob.id)}
+                                            className="px-6 py-2 bg-white text-gray-500 border border-gray-300 rounded-lg text-sm hover:bg-gray-100 transition-all whitespace-nowrap"
+                                        >
+                                            跳過，直接完成
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    )}
                     {!activeJob.finalTranscript && activeJob.state.status !== 'COMPLETED' ? (
                         <div className="flex-1 flex flex-col items-center justify-center p-10 text-center">
                             {activeJob.state.status === 'IDLE' ? (
@@ -598,7 +678,11 @@ export const Transcriber: React.FC = () => {
                                   className="flex-1 w-full p-8 focus:outline-none resize-none font-serif text-lg leading-relaxed text-gray-800 bg-white"
                                   style={{ fontFamily: '"PMingLiU", "Times New Roman", serif' }}
                                   value={activeJob.translatedTranscript || activeJob.finalTranscript}
-                                  readOnly={activeJob.state.status === TranscribeStatus.PROCESSING || activeJob.state.status === TranscribeStatus.DECODING}
+                                                    readOnly={
+                                      activeJob.state.status === TranscribeStatus.PROCESSING || 
+                                      activeJob.state.status === TranscribeStatus.DECODING ||
+                                      activeJob.state.status === TranscribeStatus.AWAITING_REFINEMENT // 加入這個狀態
+                                  }
                                   placeholder={activeJob.state.status === TranscribeStatus.PROCESSING ? "正在努力聽抄中，請稍候..." : ""}
                                   onChange={(e) => {
                                       // 只有在完成狀態才允許編輯
