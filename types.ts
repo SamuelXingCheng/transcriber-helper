@@ -51,4 +51,7 @@ export interface FileJob {
   isTranslating: boolean;
   isFormatting: boolean;
   isEnriching: boolean;
+
+  // [新增] 標記此檔案是否為參考綱目
+  isReferenceOutline?: boolean;
 }

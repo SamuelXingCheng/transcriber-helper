@@ -1,7 +1,7 @@
 import React, { useState, useRef } from 'react';
-import { Upload, FileAudio, Play, Download, RefreshCw, AlertCircle, CheckCircle2, Type, Languages, Sparkles, FileText, BookOpen, Layout, Trash2, Layers, Plus, ClipboardPen } from 'lucide-react';
+import { Upload, FileAudio, Play, Download, RefreshCw, AlertCircle, CheckCircle2, Type, Languages, Sparkles, FileText, BookOpen, Layout, Trash2, Layers, Plus, ClipboardPen, Star, Merge } from 'lucide-react';
 import { decodeAndResampleAudio, sliceAudioBufferSmart } from '../services/audioService';
-import { transcribeAudioChunk, refineAndMergeTranscript, translateTranscript, formatToLSMStyle, summarizeMeeting, enrichWithLinks } from '../services/geminiService';
+import { transcribeAudioChunk, refineAndMergeTranscript, translateTranscript, formatToLSMStyle, summarizeMeeting, enrichWithLinks, processDocument, integrateTranscriptByOutline } from '../services/geminiService';
 import { ChunkResult, ProcessingState, TranscribeStatus, FileJob } from '../types';
 
 const CHUNK_DURATION_SECONDS = 300; // 5 minutes
@@ -15,6 +15,8 @@ export const Transcriber: React.FC = () => {
   
   // [新增 1] 用來追蹤使用者的選取範圍
   const [selection, setSelection] = useState<{start: number, end: number, text: string} | null>(null);
+
+  const [masterOutlineJobId, setMasterOutlineJobId] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -116,6 +118,37 @@ export const Transcriber: React.FC = () => {
     const job = jobs.find(j => j.id === jobId);
     if (!job || job.state.status === TranscribeStatus.PROCESSING) return;
 
+    const fileType = job.file.type;
+    const isDocument = fileType.includes('pdf') || fileType.includes('image');
+
+    if (isDocument) {
+        // --- 走文件 OCR 流程 ---
+        updateJobState(jobId, { 
+            status: TranscribeStatus.PROCESSING, 
+            currentOperation: '正在辨識文件內容 (OCR)...',
+            progress: 30 
+        });
+
+        try {
+            const extractedText = await processDocument(job.file, fileType);
+            
+            updateJob(jobId, { 
+                finalTranscript: extractedText,
+                // 自動幫 PDF 做一次簡單排版，方便閱讀
+                formattedHtml: extractedText.replace(/\n/g, '<br/>')
+            });
+
+            updateJobState(jobId, { 
+                status: TranscribeStatus.COMPLETED, 
+                progress: 100, 
+                currentOperation: '文件辨識完成' 
+            });
+        } catch (error: any) {
+            updateJobState(jobId, { status: TranscribeStatus.ERROR, error: "辨識失敗: " + error.message });
+        }
+        return; // 結束，不走下面的音訊流程
+    }
+
     const cacheKey = `checkpoint_${job.file.name}_${job.file.size}`;
     const savedData = localStorage.getItem(cacheKey);
     
@@ -212,6 +245,62 @@ export const Transcriber: React.FC = () => {
             error: error.message || "處理失敗" 
         });
     }
+  };
+
+  // [新增] 將某個檔案設為「參考綱目」
+  const handleSetAsOutline = (e: React.MouseEvent, id: string) => {
+      e.stopPropagation();
+      if (masterOutlineJobId === id) {
+          setMasterOutlineJobId(null); // 取消
+      } else {
+          setMasterOutlineJobId(id); // 設定
+      }
+  };
+
+  // [新增] 執行「整合聽抄到綱目」
+  const handleIntegrateTranscript = async () => {
+      if (!activeJobId || !masterOutlineJobId) return;
+      const activeJob = jobs.find(j => j.id === activeJobId);
+      const outlineJob = jobs.find(j => j.id === masterOutlineJobId);
+
+      if (!activeJob?.finalTranscript || !outlineJob?.finalTranscript) {
+          alert("請確保目前檔案與參考綱目都有內容");
+          return;
+      }
+
+    // [新增判斷] 如果已經有排版結果，且目前不是在排版模式（代表使用者只是想切換過去看結果）
+    // 則直接顯示，不重新發送 API 請求
+    if (activeJob.formattedHtml && viewMode !== 'format') {
+        setViewMode('format');
+        return;
+    }
+
+      updateJobState(activeJobId, { 
+          status: TranscribeStatus.PROCESSING, 
+          currentOperation: '正在將聽抄內容整合至綱目架構中...' 
+      });
+
+      try {
+          // 呼叫我們剛剛在 geminiService 寫的新函式
+          const integratedHtml = await integrateTranscriptByOutline(
+              outlineJob.finalTranscript, // 綱目文字
+              activeJob.finalTranscript   // 聽抄文字
+          );
+
+          updateJob(activeJobId, { 
+              formattedHtml: integratedHtml // 將結果存入排版檢視
+          });
+          
+          setViewMode('format'); // 自動切換到排版模式看結果
+
+          updateJobState(activeJobId, { 
+              status: TranscribeStatus.COMPLETED, 
+              currentOperation: '整合完成' 
+          });
+      } catch (error: any) {
+          updateJobState(activeJobId, { status: TranscribeStatus.COMPLETED, error: "整合失敗" });
+          alert(error.message);
+      }
   };
 
   // [修改 2] 處理「AI 潤稿」的函式：支援選取範圍 + Lazy Update
@@ -464,7 +553,15 @@ export const Transcriber: React.FC = () => {
                </button>
            </div>
            
-           <input type="file" ref={fileInputRef} onChange={handleFileChange} accept="audio/*,video/*" multiple className="hidden" />
+           <input 
+                type="file" 
+                ref={fileInputRef} 
+                onChange={handleFileChange} 
+                // [修改] 支援 PDF 與 圖片
+                accept="audio/*,video/*,application/pdf,image/*" 
+                multiple 
+                className="hidden" 
+            />
         </div>
 
         <div className="flex-1 overflow-y-auto p-3 space-y-2">
@@ -484,15 +581,30 @@ export const Transcriber: React.FC = () => {
                 >
                     <div className="flex justify-between items-start mb-1">
                         <div className="flex items-center gap-2 overflow-hidden">
-                           {job.state.status === TranscribeStatus.COMPLETED ? <CheckCircle2 className="w-4 h-4 text-green-500 flex-shrink-0" /> :
-                            job.state.status === TranscribeStatus.ERROR ? <AlertCircle className="w-4 h-4 text-red-500 flex-shrink-0" /> :
-                            <FileAudio className="w-4 h-4 text-gray-400 flex-shrink-0" />
-                           }
+                           {/* [修改] 根據檔案類型顯示不同圖示 */}
+                           {job.file.type.includes('pdf') || job.file.type.includes('image') ? (
+                               <FileText className="w-4 h-4 text-orange-500 flex-shrink-0" />
+                           ) : (
+                               <FileAudio className="w-4 h-4 text-gray-400 flex-shrink-0" />
+                           )}
+                           
                            <span className="text-sm font-medium text-gray-700 truncate">{job.metadata?.fileName}</span>
                         </div>
-                        <button onClick={(e) => removeJob(e, job.id)} className="opacity-0 group-hover:opacity-100 p-1 text-gray-400 hover:text-red-500 transition-opacity">
-                            <Trash2 className="w-3 h-3" />
-                        </button>
+                        
+                        <div className="flex gap-1">
+                            {/* [新增] 設為參考綱目按鈕 */}
+                            <button 
+                                onClick={(e) => handleSetAsOutline(e, job.id)}
+                                className={`p-1 transition-colors ${masterOutlineJobId === job.id ? 'text-amber-500' : 'text-gray-300 hover:text-amber-500'}`}
+                                title="設為參考綱目"
+                            >
+                                <Star className={`w-3.5 h-3.5 ${masterOutlineJobId === job.id ? 'fill-amber-500' : ''}`} />
+                            </button>
+                            
+                            <button onClick={(e) => removeJob(e, job.id)} className="opacity-0 group-hover:opacity-100 p-1 text-gray-400 hover:text-red-500 transition-opacity">
+                                <Trash2 className="w-3 h-3" />
+                            </button>
+                        </div>
                     </div>
                     <div className="flex justify-between items-center text-xs text-gray-400 mt-2">
                        <span>{job.metadata?.duration ? formatTime(job.metadata.duration) : '--:--'}</span>
@@ -530,7 +642,7 @@ export const Transcriber: React.FC = () => {
                       <div className="flex flex-1 items-center space-x-2 overflow-x-auto lg:overflow-visible no-scrollbar">
                           <div className="relative group flex items-center">
                               <button onClick={() => setViewMode('edit')} className={`px-3 py-2 text-sm font-medium rounded-lg flex items-center gap-2 flex-shrink-0 ${viewMode === 'edit' ? 'bg-white text-blue-600 shadow-sm ring-1 ring-gray-200' : 'text-gray-600 hover:bg-gray-100'}`}>
-                                  <Type className="w-4 h-4" /> 編輯模式
+                                  <Type className="w-4 h-4" /> 逐字稿模式
                               </button>
                               <div className="absolute top-full mt-2 left-0 hidden group-hover:block w-48 bg-gray-800 text-white text-[10px] rounded py-1.5 px-3 shadow-xl z-50 pointer-events-none text-left">
                                   自由修改聽抄文字內容，修改後會同步更新至其他模式
@@ -548,6 +660,17 @@ export const Transcriber: React.FC = () => {
                               </div>
                           </div>
 
+                          {/* [新增] 整合按鈕：只有當「有設定參考綱目」且「目前不是綱目本身」時顯示 */}
+                          {masterOutlineJobId && masterOutlineJobId !== activeJobId && (
+                              <button 
+                                  onClick={handleIntegrateTranscript}
+                                  disabled={activeJob.state.status === TranscribeStatus.PROCESSING}
+                                  className="px-3 py-2 text-sm font-medium rounded-lg flex items-center gap-2 flex-shrink-0 text-amber-700 bg-amber-100 hover:bg-amber-200 transition-colors"
+                              >
+                                  <Merge className="w-4 h-4" /> 整合至綱目
+                              </button>
+                          )}
+                          
                           <div className="relative group flex items-center">
                               <button onClick={handleEnrichLinks} disabled={activeJob.isEnriching} className={`px-3 py-2 text-sm font-medium rounded-lg flex items-center gap-2 flex-shrink-0 ${viewMode === 'split' ? 'bg-white text-blue-600 shadow-sm ring-1 ring-gray-200' : 'text-gray-600 hover:bg-gray-100'}`}>
                                   {activeJob.isEnriching ? <RefreshCw className="w-4 h-4 animate-spin"/> : <BookOpen className="w-4 h-4" />} 經文對照
@@ -622,7 +745,7 @@ export const Transcriber: React.FC = () => {
                                         <Sparkles className="w-4 h-4" />
                                         <span>
                                             {activeJob.state.status === TranscribeStatus.COMPLETED 
-                                                ? "AI 隨時待命：您可以針對特定段落或全文下達指令" 
+                                                ? "AI 隨時待命：您可以反白選取特定段落進行精確修正，或直接輸入指令優化全篇文稿。" 
                                                 : "AI 修正提示與指引"}
                                         </span>
                                     </div>

@@ -13,6 +13,7 @@ export default defineConfig(({ mode }) => {
       },
       plugins: [react()],
       define: {
+        'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY),
         // [修改] 移除 API_KEY 定義，確保金鑰不會出現在前端 JS 檔案中
         'process.env.GEMINI_MODEL': JSON.stringify(env.GEMINI_MODEL || "gemini-1.5-flash")
       },

@@ -1,5 +1,22 @@
 // services/geminiService.ts
 import { blobToBase64 } from "./audioService";
+import { GoogleGenAI } from "@google/genai";
+
+// ============================================================================
+// 1. 核心連線 (用於 OCR 與 整合)
+// ============================================================================
+const getAiClient = () => {
+    // 透過 vite.config.ts 定義的環境變數取得 Key
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+        throw new Error("API Key not found. Please check your .env.local file.");
+    }
+    return new GoogleGenAI({ apiKey });
+};
+
+const getModelId = () => {
+    return process.env.GEMINI_MODEL || "gemini-2.0-flash"; 
+};
 
 // [核心功能] 呼叫後端 PHP 代理的通用函式
 const callGeminiProxy = async (action: string, payload: any): Promise<string> => {
@@ -282,6 +299,93 @@ export const summarizeMeeting = async (text: string): Promise<string> => {
         return await callGeminiProxy('format', { prompt });
     } catch (e) {
         console.error("Summarization Error:", e);
+        throw e;
+    }
+};
+
+export const processDocument = async (
+  fileBlob: Blob,
+  mimeType: string
+): Promise<string> => {
+  const ai = getAiClient();
+  const base64Data = await blobToBase64(fileBlob);
+  const modelId = getModelId(); 
+
+  const prompt = `
+    你是一位專業的職事文書處理專家。
+    請精確地辨識並提取此文件（PDF或圖片）中的所有文字內容。
+
+    **處理原則**：
+    1. **完整提取**：請從第一頁到最後一頁完整提取文字，不要遺漏，也不要進行總結。
+    2. **結構保留**：盡量保留原有的標題、段落結構與列表格式。
+    3. **術語校對**：若遇到模糊字跡，請自動根據主恢復職事常用術語進行校對（例如：交通、經綸、相調、靈中負擔）。
+    4. **語言**：請輸出為繁體中文。
+
+    輸出格式：直接回傳提取後的純文字內容。
+  `;
+
+  try {
+    const response = await ai.models.generateContent({
+      model: modelId,
+      contents: {
+        parts: [
+          {
+            inlineData: {
+              mimeType: mimeType,
+              data: base64Data,
+            },
+          },
+          { text: prompt },
+        ],
+      },
+    });
+
+    return response.text || "";
+  } catch (error) {
+    console.error("Document OCR Error:", error);
+    throw error;
+  }
+};
+
+// [新增 2] 綱目整合：將聽抄稿填入綱目結構
+export const integrateTranscriptByOutline = async (outline: string, transcript: string): Promise<string> => {
+    const ai = getAiClient();
+    const modelId = getModelId();
+
+    const prompt = `
+      You are a senior editorial expert for LSM publications.
+      
+      **Task**:
+      I will provide you with a "Reference Outline" (standard LSM format) and a "Full Transcript".
+      Your goal is to smartly distribute the transcript content into the appropriate sections of the outline.
+
+      **Inputs**:
+      1. **Reference Outline**: 
+      ${outline}
+      
+      2. **Full Transcript**: 
+      ${transcript}
+
+      **Strict Execution Rules**:
+      1. **Structure Preservation**: You MUST keep the original Outline structure (I., A., 1...) exactly as it is.
+      2. **Contextual Mapping**: Analyze which part of the transcript belongs to which Outline point.
+      3. **Smart Interleaving**: Append the relevant transcript text directly under its corresponding outline point. 
+      4. **Formatting**: Return the result in HTML string:
+         - Outline Points: <b>Bold</b> with proper indentation (margin-left).
+         - Transcript Text: Normal weight, wrapped in <div style="color: #4b5563; margin-bottom: 15px; margin-left: 20px; font-size: 0.95em;">.
+      5. **Language**: Traditional Chinese (繁體中文).
+
+      Output ONLY the combined HTML.
+    `;
+
+    try {
+        const response = await ai.models.generateContent({
+            model: modelId,
+            contents: prompt
+        });
+        return response.text || "";
+    } catch (e) {
+        console.error("Integration Error:", e);
         throw e;
     }
 };
