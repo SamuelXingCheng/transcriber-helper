@@ -11,46 +11,12 @@ export const Transcriber: React.FC = () => {
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [isBatchProcessing, setIsBatchProcessing] = useState(false);
   const [viewMode, setViewMode] = useState<'edit' | 'format' | 'split'>('edit');
-  const [userInstructions, setUserInstructions] = useState(''); // 儲存使用者的修正指令
+  const [userInstructions, setUserInstructions] = useState(''); 
+  
+  // [新增 1] 用來追蹤使用者的選取範圍
+  const [selection, setSelection] = useState<{start: number, end: number, text: string} | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
-
-  const handleCreateTextJob = () => {
-    const newId = Math.random().toString(36).substring(7);
-    const timestamp = new Date().toLocaleString('zh-TW', { hour12: false, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
-    
-    const newJob: FileJob = {
-        id: newId,
-        // 建立一個虛擬的 File 物件 (這是關鍵，為了符合 TypeScript 類型)
-        file: new File([""], `手動輸入_${timestamp}.txt`, { type: "text/plain" }),
-        metadata: {
-            fileName: `手動輸入_${timestamp}`, // 檔名
-            size: 0,
-            type: "text/plain",
-            duration: 0,
-        },
-        state: {
-            // [關鍵] 直接設為 COMPLETED，這樣編輯器就會解鎖，讓您可以貼上文字
-            status: TranscribeStatus.COMPLETED, 
-            progress: 100,
-            totalChunks: 0,
-            completedChunks: 0,
-            currentOperation: '就緒 (請貼上文字)',
-        },
-        chunks: [],
-        finalTranscript: '', // 預設為空，等待您貼上
-        translatedTranscript: '',
-        formattedHtml: '',
-        enrichedHtml: '',
-        isTranslating: false,
-        isFormatting: false,
-        isEnriching: false,
-    };
-
-    setJobs(prev => [newJob, ...prev]); // 加到列表最前面
-    setActiveJobId(newId); // 自動選取
-    setViewMode('edit'); // 切換到編輯模式
-  };
 
   const updateJob = (id: string, updates: Partial<FileJob> | ((prev: FileJob) => Partial<FileJob>)) => {
     setJobs(prevJobs => prevJobs.map(job => {
@@ -100,6 +66,42 @@ export const Transcriber: React.FC = () => {
       }
     }
     if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  // 建立空白文字檔案 (貼上逐字稿功能)
+  const handleCreateTextJob = () => {
+    const newId = Math.random().toString(36).substring(7);
+    const timestamp = new Date().toLocaleString('zh-TW', { hour12: false, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+    
+    const newJob: FileJob = {
+        id: newId,
+        file: new File([""], `手動輸入_${timestamp}.txt`, { type: "text/plain" }),
+        metadata: {
+            fileName: `手動輸入_${timestamp}`,
+            size: 0,
+            type: "text/plain",
+            duration: 0,
+        },
+        state: {
+            status: TranscribeStatus.COMPLETED,
+            progress: 100,
+            totalChunks: 0,
+            completedChunks: 0,
+            currentOperation: '就緒 (請貼上文字)',
+        },
+        chunks: [],
+        finalTranscript: '',
+        translatedTranscript: '',
+        formattedHtml: '',
+        enrichedHtml: '',
+        isTranslating: false,
+        isFormatting: false,
+        isEnriching: false,
+    };
+
+    setJobs(prev => [newJob, ...prev]);
+    setActiveJobId(newId);
+    setViewMode('edit');
   };
 
   const removeJob = (e: React.MouseEvent, id: string) => {
@@ -212,61 +214,62 @@ export const Transcriber: React.FC = () => {
     }
   };
 
+  // [修改 2] 處理「AI 潤稿」的函式：支援選取範圍 + Lazy Update
   const handleFinalRefine = async (jobId: string) => {
     const job = jobs.find(j => j.id === jobId);
-    if (!job || !job.finalTranscript) return;
+    if (!job) return;
 
-    // 1. 進入處理狀態
+    // [修正] 判定目前顯示的是哪一份文字
+    const currentActiveText = job.translatedTranscript || job.finalTranscript;
+    if (!currentActiveText) return;
+
+    // 判斷是否有選取範圍
+    const isPartial = selection && selection.text.length > 0;
+    const targetText = isPartial ? selection.text : currentActiveText;
+
     updateJobState(jobId, { 
         status: TranscribeStatus.PROCESSING, 
-        currentOperation: '正在修正文稿並同步更新總結...' 
+        currentOperation: isPartial ? '正在優化選取段落...' : '正在優化全篇文稿...' 
     });
     
     try {
-        // 第一階段：根據指令優化底層文稿 (確保基礎資料正確)
-        const refinedText = await refineAndMergeTranscript(job.finalTranscript, userInstructions);
+        const refinedText = await refineAndMergeTranscript(targetText, userInstructions);
         
-        // 準備更新物件
-        let updates: Partial<FileJob> = {
-            finalTranscript: refinedText,
-            lsmHtml: '', // 清除舊的排版暫存
+        let newResultText = '';
+
+        if (isPartial && selection) {
+            // [修正] 使用「目前顯示的文字」作為基準進行切割與拼湊
+            newResultText = currentActiveText.substring(0, selection.start) + refinedText + currentActiveText.substring(selection.end);
+            setSelection(null); 
+        } else {
+            newResultText = refinedText;
+        }
+        
+        // [修正] 根據目前模式，更新對應的欄位並清空相關暫存
+        const updates: Partial<FileJob> = {
+            formattedHtml: '', // 文字更動，舊排版過期
+            enrichedHtml: ''   // 文字更動，舊連結過期
         };
 
-        // 第二階段：智慧自動更新
-        // 如果使用者目前正在看「會議總結」模式，自動觸發重新總結
-        if (viewMode === 'format') {
-            updateJobState(jobId, { currentOperation: '文稿已修正，正在重新生成總結...' });
-            
-            // 根據修正後的文字重新生成總結
-            const newSummary = await summarizeMeeting(refinedText);
-            
-            updates.summaryHtml = newSummary;   // 更新總結暫存
-            updates.formattedHtml = newSummary; // 更新目前畫面顯示
+        if (job.translatedTranscript) {
+            updates.translatedTranscript = newResultText;
         } else {
-            // 如果是在編輯模式，則清空總結暫存，確保下次點擊時會重新生成
-            updates.summaryHtml = '';
-            updates.formattedHtml = '';
+            updates.finalTranscript = newResultText;
         }
 
-        // 一次性更新所有欄位
         updateJob(jobId, updates);
-        
+
         updateJobState(jobId, { 
             status: TranscribeStatus.COMPLETED, 
-            currentOperation: '優化完成！文稿與總結已同步更新。' 
+            currentOperation: isPartial ? '局部優化完成' : '優化完成' 
         });
-        
-        // 清空指令框
         setUserInstructions(''); 
 
     } catch (error: any) {
-        updateJobState(jobId, { 
-            status: TranscribeStatus.COMPLETED, // 即使失敗也維持在完成狀態，方便重試
-            error: "同步優化失敗" 
-        });
-        alert(`同步優化失敗: ${error.message}`);
+        updateJobState(jobId, { status: TranscribeStatus.COMPLETED, error: "優化失敗" });
+        alert(`優化失敗: ${error.message}`);
     }
-  };
+};
 
   const handleSkipRefine = (jobId: string) => {
       updateJobState(jobId, { 
@@ -290,12 +293,15 @@ export const Transcriber: React.FC = () => {
     const job = jobs.find(j => j.id === activeJobId);
     if (!job) return;
 
-    if (job.summaryHtml) { 
+    // 如果已經有總結，直接顯示，不重跑 (Lazy Loading)
+    // 若使用者想強制重跑，可以先切換語言或重整，或者我們可以在 UI 加一個「強制重整」按鈕，但目前保留簡單邏輯
+    if (job.summaryHtml && viewMode !== 'format') { 
         updateJob(activeJobId, { formattedHtml: job.summaryHtml });
         setViewMode('format'); 
         return;
     }
-
+    // 如果已經在 format 模式下點擊，代表使用者想要「強制更新」
+    
     const sourceText = job.translatedTranscript || job.finalTranscript;
     if (!sourceText) return;
 
@@ -433,28 +439,25 @@ export const Transcriber: React.FC = () => {
       
       {/* Sidebar */}
       <div className="w-full lg:w-96 h-1/3 lg:h-full flex-shrink-0 flex flex-col bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
-        
-        {/* Sidebar Header [修改處] */}
         <div className="p-4 border-b border-gray-100 bg-gray-50 flex items-center justify-between">
            <h2 className="font-semibold text-gray-700 flex items-center gap-2">
              <Layers className="w-5 h-5 text-blue-600" /> 檔案列表 ({jobs.length})
            </h2>
            
-           {/* [修改] 使用 flex gap-2 將新按鈕與舊按鈕包在一起 */}
            <div className="flex gap-2">
-               {/* 新增：綠色筆記按鈕 */}
+               {/* 綠色筆記按鈕 */}
                <button 
                  onClick={handleCreateTextJob}
-                 className="p-1.5 bg-green-100 text-green-600 rounded-lg hover:bg-green-200 transition-colors"
+                 className="p-1.5 bg-green-100 text-green-600 rounded-lg hover:bg-green-200 transition-colors shadow-sm"
                  title="新增文字筆記/貼上逐字稿"
                >
                  <ClipboardPen className="w-4 h-4" />
                </button>
 
-               {/* 原本的：藍色上傳按鈕 */}
+               {/* 藍色上傳按鈕 */}
                <button 
                  onClick={() => fileInputRef.current?.click()}
-                 className="p-1.5 bg-blue-100 text-blue-600 rounded-lg hover:bg-blue-200 transition-colors"
+                 className="p-1.5 bg-blue-100 text-blue-600 rounded-lg hover:bg-blue-200 transition-colors shadow-sm"
                  title="上傳錄音檔"
                >
                  <Plus className="w-4 h-4" />
@@ -464,7 +467,6 @@ export const Transcriber: React.FC = () => {
            <input type="file" ref={fileInputRef} onChange={handleFileChange} accept="audio/*,video/*" multiple className="hidden" />
         </div>
 
-        {/* File List (以下完全保留原樣) */}
         <div className="flex-1 overflow-y-auto p-3 space-y-2">
             {jobs.length === 0 && (
                 <div className="h-full flex flex-col items-center justify-center text-gray-400 p-4 text-center">
@@ -586,30 +588,29 @@ export const Transcriber: React.FC = () => {
                  {/* Content Area */}
                  <div className="flex-1 relative overflow-hidden flex flex-col bg-gray-50/50">
                     
-                    {/* [新增] 頂部進度條：當有文字顯示且仍在處理中時，顯示詳細進度 */}
-                    {activeJob && activeJob.state.status === TranscribeStatus.PROCESSING && activeJob.finalTranscript && (
-                        <div className="px-6 py-2 bg-white border-b border-gray-200 flex flex-col gap-1 flex-shrink-0 z-20">
-                            <div className="flex justify-between text-xs font-medium text-gray-500">
+                    {/* [修正] 頂部進度列：移除 absolute，改為自然排版，避免遮擋 */}
+                    {activeJob && (activeJob.state.status === TranscribeStatus.PROCESSING || activeJob.state.status === TranscribeStatus.DECODING) && (
+                        <div className="flex-shrink-0 z-30 border-b border-blue-100 animate-in fade-in">
+                            {/* 進度條本體 */}
+                            <div className="h-1 bg-blue-100 w-full">
+                                <div 
+                                    className="h-full bg-blue-500 transition-all duration-500 ease-out shadow-[0_0_8px_rgba(37,99,235,0.4)]" 
+                                    style={{ width: `${activeJob.state.progress}%` }}
+                                />
+                            </div>
+                            {/* 狀態文字列：加入白色背景確保文字清晰 */}
+                            <div className="bg-white px-4 py-1.5 flex justify-between items-center text-[10px] text-blue-600 font-bold tracking-wide">
                                 <span className="flex items-center gap-2">
-                                    <RefreshCw className="w-3 h-3 animate-spin text-blue-500" />
+                                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
                                     {activeJob.state.currentOperation}
                                 </span>
-                                <span className="text-blue-600">{activeJob.state.progress}%</span>
-                            </div>
-                            <div className="w-full bg-gray-100 rounded-full h-1.5 overflow-hidden">
-                                <div 
-                                    className="bg-blue-600 h-1.5 rounded-full transition-all duration-500 ease-out shadow-[0_0_10px_rgba(37,99,235,0.3)]" 
-                                    style={{ width: `${activeJob.state.progress}%` }}
-                                ></div>
+                                <span className="bg-blue-50 px-2 py-0.5 rounded-full">{activeJob.state.progress}%</span>
                             </div>
                         </div>
                     )}
-                    {/* [修改] 持久化提示框：辨識中、等待潤稿、甚至「完成後」都顯示，支援多次修改 */}
-                    {activeJob && (
-                        activeJob.state.status === TranscribeStatus.PROCESSING || 
-                        activeJob.state.status === TranscribeStatus.AWAITING_REFINEMENT || 
-                        activeJob.state.status === TranscribeStatus.COMPLETED // [新增] 完成後依然顯示
-                    ) && (
+                    
+                    {/* 修正後的持久化提示框 */}
+                    {activeJob && (activeJob.state.status === TranscribeStatus.PROCESSING || activeJob.state.status === TranscribeStatus.AWAITING_REFINEMENT || activeJob.state.status === TranscribeStatus.COMPLETED) && (
                         <div className={`flex-shrink-0 p-4 border-b shadow-sm animate-in slide-in-from-top-4 z-10 ${
                             activeJob.state.status === TranscribeStatus.COMPLETED ? 'bg-green-50 border-green-100' : 'bg-blue-50 border-blue-100'
                         }`}>
@@ -621,50 +622,62 @@ export const Transcriber: React.FC = () => {
                                         <Sparkles className="w-4 h-4" />
                                         <span>
                                             {activeJob.state.status === TranscribeStatus.COMPLETED 
-                                                ? "AI 隨時待命：您可以繼續下指令，請 AI 再次潤飾或是修正特定錯誤" 
+                                                ? "AI 隨時待命：您可以針對特定段落或全文下達指令" 
                                                 : "AI 修正提示與指引"}
                                         </span>
                                     </div>
+                                    
+                                    {/* 選取範圍預覽區塊：改用琥珀色 (Amber) 提高辨識度 */}
+                                    {selection && (
+                                        <div className="mb-2 flex items-start gap-2 bg-amber-50 p-2 rounded border border-dashed border-amber-300 animate-in fade-in">
+                                            <div className="text-[10px] bg-amber-500 text-white px-1.5 py-0.5 rounded font-bold uppercase mt-0.5">
+                                                局部優化中
+                                            </div>
+                                            <div className="text-xs text-amber-900 italic line-clamp-2 leading-relaxed flex-1">
+                                                「{selection.text}」
+                                            </div>
+                                            <button 
+                                                onClick={() => setSelection(null)}
+                                                className="text-[10px] text-amber-600 hover:text-red-500 underline ml-auto whitespace-nowrap font-medium"
+                                            >
+                                                取消選取
+                                            </button>
+                                        </div>
+                                    )}
+
                                     <textarea 
                                         value={userInstructions}
                                         onChange={(e) => setUserInstructions(e.target.value)}
-                                        placeholder={activeJob.state.status === TranscribeStatus.COMPLETED 
-                                            ? "例如：『請把語氣改得更正式一點』、『第三段的經節引用有誤請修正』..." 
-                                            : "邊看邊寫：例如『把零弟兄改為林弟兄』..."}
+                                        placeholder="請在此輸入修正指令..."
                                         className={`w-full p-2 text-sm border rounded-lg h-20 focus:ring-2 outline-none resize-none shadow-inner bg-white/60 ${
-                                            activeJob.state.status === TranscribeStatus.COMPLETED 
-                                            ? 'border-green-200 focus:ring-green-400 placeholder-green-700/50' 
-                                            : 'border-blue-200 focus:ring-blue-400'
+                                            activeJob.state.status === TranscribeStatus.COMPLETED ? 'border-green-200 focus:ring-green-400' : 'border-blue-200 focus:ring-blue-400'
                                         }`}
                                     />
                                 </div>
                                 
-                                {/* 按鈕邏輯：在「等待潤稿」或是「已完成」時都可以按 */}
                                 {(activeJob.state.status === TranscribeStatus.AWAITING_REFINEMENT || activeJob.state.status === TranscribeStatus.COMPLETED) && (
                                     <div className="flex flex-col gap-2 pt-6">
                                         <button 
                                             onClick={() => handleFinalRefine(activeJob.id)}
-                                            disabled={!userInstructions && activeJob.state.status === TranscribeStatus.COMPLETED} // 完成狀態下，沒寫字不給按，避免誤觸
+                                            disabled={(activeJob.state.status === TranscribeStatus.PROCESSING) || (!userInstructions && activeJob.state.status === TranscribeStatus.COMPLETED && !selection)} 
                                             className={`px-6 py-2 text-white rounded-lg text-sm font-bold shadow-md transition-all flex items-center justify-center gap-2 whitespace-nowrap ${
-                                                !userInstructions && activeJob.state.status === TranscribeStatus.COMPLETED
+                                                (activeJob.state.status === TranscribeStatus.PROCESSING) || (!userInstructions && activeJob.state.status === TranscribeStatus.COMPLETED && !selection)
                                                 ? 'bg-gray-400 cursor-not-allowed'
-                                                : activeJob.state.status === TranscribeStatus.COMPLETED 
-                                                    ? 'bg-green-600 hover:bg-green-700' 
-                                                    : 'bg-blue-600 hover:bg-blue-700'
+                                                : activeJob.state.status === TranscribeStatus.COMPLETED ? 'bg-green-600 hover:bg-green-700' : 'bg-blue-600 hover:bg-blue-700'
                                             }`}
                                         >
-                                            <Sparkles className="w-4 h-4" /> 
-                                            {activeJob.state.status === TranscribeStatus.COMPLETED ? "再次優化 (Re-refine)" : "確認並執行潤稿"}
+                                            {/* 修正後的圖示切換 */}
+                                            {activeJob.state.status === TranscribeStatus.PROCESSING ? (
+                                                <RefreshCw className="w-4 h-4 animate-spin" />
+                                            ) : (
+                                                <Sparkles className="w-4 h-4" />
+                                            )}
+                                            
+                                            {selection ? "僅優化選取範圍" : "執行優化"}
                                         </button>
                                         
-                                        {/* 只有在等待階段才顯示跳過按鈕，完成後就不需要跳過了 */}
                                         {activeJob.state.status === TranscribeStatus.AWAITING_REFINEMENT && (
-                                            <button 
-                                                onClick={() => handleSkipRefine(activeJob.id)}
-                                                className="text-xs text-blue-400 hover:text-blue-600 underline text-center"
-                                            >
-                                                跳過潤稿，直接完成
-                                            </button>
+                                            <button onClick={() => handleSkipRefine(activeJob.id)} className="text-xs text-blue-400 hover:text-blue-600 underline text-center">跳過</button>
                                         )}
                                     </div>
                                 )}
@@ -705,28 +718,40 @@ export const Transcriber: React.FC = () => {
                                   className="flex-1 w-full p-8 focus:outline-none resize-none font-serif text-lg leading-relaxed text-gray-800 bg-white"
                                   style={{ fontFamily: '"PMingLiU", "Times New Roman", serif' }}
                                   value={activeJob.translatedTranscript || activeJob.finalTranscript}
-                                  // [修正重點 2] 解除鎖定：只在解碼或處理中唯讀，等待潤稿時(AWAITING_REFINEMENT)開放編輯
                                   readOnly={
                                       activeJob.state.status === TranscribeStatus.PROCESSING || 
                                       activeJob.state.status === TranscribeStatus.DECODING
                                   }
                                   placeholder={activeJob.state.status === TranscribeStatus.PROCESSING ? "正在努力聽抄中，請稍候..." : ""}
+                                  
+                                  // [新增 3] 偵測選取範圍
+                                  onSelect={(e) => {
+                                      const target = e.target as HTMLTextAreaElement;
+                                      if (target.selectionStart !== target.selectionEnd) {
+                                          setSelection({
+                                              start: target.selectionStart,
+                                              end: target.selectionEnd,
+                                              text: target.value.substring(target.selectionStart, target.selectionEnd)
+                                          });
+                                      } else {
+                                          setSelection(null);
+                                      }
+                                  }}
+
                                   onChange={(e) => {
-                                      // 允許在 完成(COMPLETED) 或 等待潤稿(AWAITING_REFINEMENT) 狀態下修改
                                       if (activeJob.state.status === TranscribeStatus.COMPLETED || activeJob.state.status === TranscribeStatus.AWAITING_REFINEMENT) {
                                           const newValue = e.target.value;
-                                          
                                           if (activeJob.translatedTranscript) {
                                               updateJob(activeJob.id, { 
                                                   translatedTranscript: newValue,
-                                                  formattedHtml: '', // 清除舊排版暫存
-                                                  enrichedHtml: ''   // 清除舊連結暫存
+                                                  formattedHtml: '', 
+                                                  enrichedHtml: ''
                                               }); 
                                           } else {
                                               updateJob(activeJob.id, { 
                                                   finalTranscript: newValue,
-                                                  formattedHtml: '', // 清除舊排版暫存
-                                                  enrichedHtml: ''   // 清除舊連結暫存
+                                                  formattedHtml: '', 
+                                                  enrichedHtml: ''
                                               });
                                           }
                                       }
@@ -734,8 +759,28 @@ export const Transcriber: React.FC = () => {
                               />
                           )}
                             {viewMode === 'format' && (
-                                <div className="flex-1 overflow-y-auto p-8 bg-white">
-                                    <div className="max-w-4xl mx-auto prose prose-lg" dangerouslySetInnerHTML={{ __html: activeJob.formattedHtml || '<p class="text-gray-400 italic">尚未排版，請點擊上方 "LSM 排版"</p>' }} />
+                                <div className="flex-1 overflow-y-auto p-8 bg-white relative">
+                                    {/* [新增 4] 總結直接編輯功能 (Editable Summary) */}
+                                    <div className="absolute top-2 right-4 text-xs text-gray-400 select-none">
+                                        可以直接點擊內容進行修改
+                                    </div>
+                                    <div 
+                                        className="max-w-4xl mx-auto prose prose-lg outline-none" 
+                                        contentEditable={true} 
+                                        suppressContentEditableWarning={true}
+                                        dangerouslySetInnerHTML={{ __html: activeJob.formattedHtml || '<p class="text-gray-400 italic">尚未排版，請點擊上方 "LSM 排版"</p>' }} 
+                                        
+                                        // 失去焦點時自動存檔
+                                        onBlur={(e) => {
+                                            const newHtml = e.currentTarget.innerHTML;
+                                            if (newHtml !== activeJob.formattedHtml) {
+                                                updateJob(activeJob.id, { 
+                                                    formattedHtml: newHtml,
+                                                    summaryHtml: newHtml
+                                                });
+                                            }
+                                        }}
+                                    />
                                 </div>
                             )}
                             {viewMode === 'split' && (

@@ -25,6 +25,16 @@
       ::-webkit-scrollbar-thumb:hover {
         background: #a8a8a8; 
       }
+      /* 確保選取範圍在失去焦點時依然清晰可見 */
+      textarea:not(:focus)::selection {
+          background-color: #bfdbfe !important; /* 明亮的粉藍色 */
+          color: #1e3a8a !important; /* 深藍色文字 */
+      }
+      /* 針對 Firefox */
+      textarea:not(:focus)::-moz-selection {
+          background-color: #bfdbfe !important;
+          color: #1e3a8a !important;
+      }
     </style>
   <script type="importmap">
 {
