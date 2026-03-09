@@ -14,7 +14,7 @@ import {
 } from '../services/geminiService';
 import { ChunkResult, ProcessingState, TranscribeStatus, FileJob } from '../types';
 
-const CHUNK_DURATION_SECONDS = 300; // 5 minutes
+const CHUNK_DURATION_SECONDS = 180;
 
 export const Transcriber: React.FC = () => {
   const [jobs, setJobs] = useState<FileJob[]>([]);
@@ -40,6 +40,14 @@ export const Transcriber: React.FC = () => {
   const [integratedJobIds, setIntegratedJobIds] = useState<Set<string>>(new Set());
   // 聚會模式處理狀態
   const [isMeetingProcessing, setIsMeetingProcessing] = useState(false);
+
+  // [新增] 建立一個 Ref 來隨時追蹤最新的 jobs 狀態
+  const jobsRef = useRef(jobs);
+
+  // [新增] 當 jobs 變動時，同步更新 ref
+  React.useEffect(() => {
+      jobsRef.current = jobs;
+  }, [jobs]);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -120,8 +128,21 @@ export const Transcriber: React.FC = () => {
   const triggerMeetingConsolidation = async (newTranscript: string, jobId: string) => {
     if (!masterOutlineJobId || integratedJobIds.has(jobId)) return;
 
-    const outlineJob = jobs.find(j => j.id === masterOutlineJobId);
-    if (!outlineJob?.finalTranscript) return;
+    // 原本是：const outlineJob = jobs.find(...)
+    // 改為 ↓
+    const currentJobs = jobsRef.current; 
+    const outlineJob = currentJobs.find(j => j.id === masterOutlineJobId);
+
+    // 如果綱目還沒好 (理論上批次處理 PDF 會先跑完)，就無法整合
+    if (!outlineJob?.finalTranscript) {
+        console.warn("整合略過：尚未偵測到綱目內容 (可能是讀取到舊狀態或PDF尚未處理)");
+        return;
+    }
+
+    // [建議保留] 強制切換視圖
+    if (viewMode !== 'meeting') {
+        setViewMode('meeting');
+    }
 
     setIsMeetingProcessing(true);
     try {
@@ -223,6 +244,7 @@ export const Transcriber: React.FC = () => {
             updateJobState(jobId, { currentOperation: `聽抄片段 ${i + 1}/${total}...`, progress: Math.round((i / total) * 90) });
 
             try {
+                await new Promise(resolve => setTimeout(resolve, 2000));
                 const context = accumulatedText.slice(-200);
                 const text = await transcribeAudioChunk(blob, context);
                 const timeLabel = `[${formatTime(start)}] `;
@@ -242,13 +264,30 @@ export const Transcriber: React.FC = () => {
 
         localStorage.removeItem(cacheKey);
 
-        updateJobState(jobId, { status: TranscribeStatus.AWAITING_REFINEMENT, progress: 100, currentOperation: '聽抄完成' });
+        // [修改開始] 優化聚會模式流程
+        // 原本的寫法：強制停在 AWAITING_REFINEMENT
+        // updateJobState(jobId, { status: TranscribeStatus.AWAITING_REFINEMENT, progress: 100, currentOperation: '聽抄完成' });
 
-        // [新增 3] 聚會模式觸發點：聽抄完成後，若為聚會模式，自動整合
+        // 新的寫法：如果是聚會模式，直接視為完成 (COMPLETED)，讓批次處理繼續往下走
         if (isMeetingMode) {
-            // 注意：這裡我們使用 accumulatedText (最新的完整文字)
+            updateJobState(jobId, { 
+                status: TranscribeStatus.COMPLETED, 
+                progress: 100, 
+                currentOperation: '聽抄完成 (已自動整合)' 
+            });
+            
+            // 觸發整合 (保持原有的邏輯)
             await triggerMeetingConsolidation(accumulatedText, jobId);
+            
+        } else {
+            // 非聚會模式，維持原本邏輯，停下來讓使用者決定是否潤稿
+            updateJobState(jobId, { 
+                status: TranscribeStatus.AWAITING_REFINEMENT, 
+                progress: 100, 
+                currentOperation: '聽抄完成 (等待確認)' 
+            });
         }
+        // [修改結束]
 
     } catch (error: any) {
         console.error("Critical Error:", error);
@@ -345,7 +384,7 @@ const handleManualConsolidateAll = async () => {
     
     const outlineJob = jobs.find(j => j.id === masterOutlineJobId);
     if (!outlineJob?.finalTranscript) return;
-
+    
     // 1. 蒐集所有「已完成」且「非文件(即音訊)」的檔案文字
     // 這裡我們依照列表順序排列 (確保聚會順序正確)
     const completedAudioJobs = jobs.filter(j => 

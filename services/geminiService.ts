@@ -22,7 +22,7 @@ const getModelId = () => {
 const callGeminiProxy = async (action: string, payload: any): Promise<string> => {
   try {
     // [修改] 使用您提供的正確完整網址，不再使用相對路徑
-    const proxyUrl = 'https://www.citcnew.org.tw/trans/proxy.php';
+    const proxyUrl = 'https://www.churchintaichung.org/trans/proxy.php';
     
     const response = await fetch(proxyUrl, {
       method: 'POST',
@@ -347,7 +347,6 @@ export const processDocument = async (
   }
 };
 
-// [新增 2] 綱目整合：將聽抄稿填入綱目結構
 export const integrateTranscriptByOutline = async (outline: string, transcript: string): Promise<string> => {
     const ai = getAiClient();
     const modelId = getModelId();
@@ -369,11 +368,14 @@ export const integrateTranscriptByOutline = async (outline: string, transcript: 
       **Strict Execution Rules**:
       1. **Structure Preservation**: You MUST keep the original Outline structure (I., A., 1...) exactly as it is.
       2. **Contextual Mapping**: Analyze which part of the transcript belongs to which Outline point.
-      3. **Smart Interleaving**: Append the relevant transcript text directly under its corresponding outline point. 
-      4. **Formatting**: Return the result in HTML string:
-         - Outline Points: <b>Bold</b> with proper indentation (margin-left).
-         - Transcript Text: Normal weight, wrapped in <div style="color: #4b5563; margin-bottom: 15px; margin-left: 20px; font-size: 0.95em;">.
-      5. **Language**: Traditional Chinese (繁體中文).
+      3. **NO DELETION OR SUMMARIZATION**: You MUST retain the ENTIRE transcript. Every single sentence from the transcript must be placed under an outline point. Do not drop, omit, or summarize any paragraphs, even if they seem loosely connected.
+      4. **Basic Editing Only**: You are allowed to perform minor proofreading (e.g., removing redundant filler words, correcting obvious speech disfluencies or typos) to make it readable, but you CANNOT change the core meaning or reduce the overall length of the speaker's content.
+      5. **Smart Interleaving**: Append the relevant transcript text directly under its corresponding outline point. 
+      6. **Formatting**: Return the result in HTML string:
+         - **Outline Points**: Use <b style="color: #000000;">Bold Black</b> with proper indentation (margin-left).
+         - **Scriptures**: If there are Bible verses citations (e.g., Genesis 1:1, 馬太福音一章1節) in the outline or text, wrap them in <span style="color: #8B0000; font-weight: bold;"> (Dark Red).
+         - **Transcript Text**: Normal weight, wrapped in <div style="color: #003366; margin-bottom: 15px; margin-left: 20px; font-size: 0.95em;"> (Dark Blue).
+      7. **Language**: Traditional Chinese (繁體中文).
 
       Output ONLY the combined HTML.
     `;

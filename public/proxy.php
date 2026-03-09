@@ -17,7 +17,7 @@ $config = require $configPath;
 
 // [修正點] 統一變數名稱為 $apiKey
 $apiKey = $config['GEMINI_API_KEY'] ?? null;
-$model  = $config['GEMINI_MODEL'] ?? "gemini-2.0-flash";
+$model  = $config['GEMINI_MODEL'] ?? "gemini-3-flash-preview";
 
 if (!$apiKey) {
     http_response_code(500);
